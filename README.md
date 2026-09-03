@@ -1,1 +1,99 @@
 # light-agent
+
+## Intro
+
+OpenRouter/Kilo Code/DeepSeek's agent harness are the build-time tooling only; the running agent stays 100% local via Ollama. Here's the plan.
+
+## Phase 0 — Foundations (before any agent logic)
+
+- Install Ollama on both machines, pull `phi4-mini` and `qwen2.5-coder:3b`.
+- Confirm both respond to `/api/chat` with a `tools` payload correctly (quick curl/Python test) — this validates the whole architecture before you build on top of it.
+- Decide the skills storage location: `%APPDATA%\MiniAgent\skills\` (Windows) / `~/.config/mini-agent/skills/` (Linux), same auto-detect pattern as your other tools.
+
+## Phase 1 — Project skeleton
+
+```
+mini-agent/
+├── main.py              # entry point / CLI loop
+├── config.py            # paths, model names, Ollama host — JSON persisted
+├── router.py            # talks to phi4-mini, owns the tool-calling loop
+├── coder.py             # talks to qwen2.5-coder:3b, called AS a skill
+├── skills/
+│   ├── __init__.py      # registry: auto-discovers skills, builds tools[] schema
+│   ├── fs_skills.py      # list_files, read_file, move_file, etc.
+│   └── code_skills.py    # run_coder(prompt, context) -> wraps coder.py
+├── platform_utils.py    # pathlib-based OS dispatch (open file, etc.)
+└── logs/
+```
+
+**Skill contract** — every skill is a plain function + a schema dict, e.g.:
+
+```python
+# skills/fs_skills.py
+def list_files(path: str) -> dict:
+    p = Path(path)
+    return {"files": [f.name for f in p.iterdir()]} if p.exists() else {"error": "not found"}
+
+SCHEMA = {
+    "type": "function",
+    "function": {
+        "name": "list_files",
+        "description": "List file names in a given folder",
+        "parameters": {
+            "type": "object",
+            "properties": {"path": {"type": "string"}},
+            "required": ["path"]
+        }
+    }
+}
+```
+
+`skills/__init__.py` scans the module, builds `TOOLS = [schema, ...]` and a `dispatch = {name: func}` dict. Adding a skill later = new function + new file, nothing else changes — this is the "expand skills over time" capability you wanted.
+
+## Phase 2 — Router loop
+
+`router.py` does the standard tool-calling cycle against `phi4-mini`:
+1. Send user message + `TOOLS` list.
+2. If response has `tool_calls` → look up in `dispatch`, execute locally, feed result back as a `tool` role message, get final natural-language reply.
+3. If no tool call → just return the text (general chat / reasoning that doesn't need a tool).
+
+## Phase 3 — Coder as a skill, not a separate path
+
+`run_coder(prompt, file_content=None)` in `code_skills.py` calls `qwen2.5-coder:3b` directly (no tools needed on that call — it's a leaf, not a sub-router). Keep prompts here tight: coder model gets *only* the file content + question, not the whole conversation history, to save context and stay fast on limited hardware.
+
+## Phase 4 — Two-tier speed optimization
+
+Once the basic loop works, add a cheap pre-filter in `main.py` before even calling Phi4-mini: regex/keyword match for very common deterministic commands ("list files in", "list folder"). If matched, call the skill directly and skip the router LLM call entirely. Falls back to the full router for anything ambiguous. This is the "if it's faster, run a Python script directly" behavior from your example — just made explicit and cheap rather than relying on the LLM to always decide correctly.
+
+## Phase 5 — Packaging & cross-platform testing
+
+- Test on Mint first (simpler paths), then Windows.
+- PyInstaller build with your known `sys.frozen`/`sys.executable` fix for locating the skills folder relative to the `.exe`.
+- Ollama stays an external dependency — check at startup that `localhost:11434` responds, and show a clear error/instructions if not (rather than a silent hang), given both target machines are resource-limited and you don't want it silently trying to auto-launch something heavy.
+
+## Where to use Kilo Code / OpenRouter / DeepSeek's harness
+
+Use them to *write and debug* the modules above — e.g. have Kilo Code (backed by an OpenRouter free model or DeepSeek's agent) scaffold `skills/__init__.py`'s auto-discovery logic, or debug a tricky PySide/CLI issue — same role Claude has played in your other projects, just an additional/parallel assistant. None of that code path touches the running mini-agent.
+
+
+## Notes on Phases 1 & 2
+
+Registry wiring works — all 4 tools discovered correctly. Now packaging it up.
+
+Everything's syntax-checked and the skill registry wiring verified end-to-end (imports run, `init_skills` binds config to the coder skill, all 4 tools auto-register). To try it:
+
+```bash
+pip install -r requirements.txt
+ollama pull phi4-mini
+ollama pull qwen2.5-coder:3b
+python main.py
+```
+
+A few notes on what's in there:
+
+- **`try_fast_path` in `main.py`** only matches the "list files" phrasing right now (Phase 4's optimization). It's intentionally narrow — extend the regex or add more patterns as you find recurring commands worth short-circuiting.
+- **`router.py`**'s tool loop currently does one round of tool calls per turn (call tools → feed results back → final answer). If you later want the router to chain multiple tool calls in sequence (e.g. list files, then read one, then diagnose it, all without you re-prompting), that loop needs to become recursive — happy to extend it when you hit that need.
+- I didn't add error-message polish or logging yet (there's an empty `logs/` folder waiting) — wanted to keep this pass focused on the skeleton being structurally correct first.
+
+
+> AI tip: Bring back whatever breaks once you run it against real Ollama — untested against the actual models, only against the Python plumbing.
