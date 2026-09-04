@@ -6,8 +6,8 @@ OpenRouter/Kilo Code/DeepSeek's agent harness are the build-time tooling only; t
 
 ## Phase 0 — Foundations (before any agent logic)
 
-- Install Ollama on both machines, pull `phi4-mini` and `qwen2.5-coder:3b`.
-- Confirm both respond to `/api/chat` with a `tools` payload correctly (quick curl/Python test) — this validates the whole architecture before you build on top of it.
+- Install Ollama on both machines, pull `qwen3:4b-instruct` (router) and `qwen2.5-coder:3b` (coder).
+- Confirm both respond to `/api/chat` correctly — in particular, that the router returns a **structured `tool_calls` field** (not raw text) when given a `tools` payload. A quick curl/Python test validates the whole architecture before you build on top of it (see [Router model notes](#router-model-notes)).
 - Decide the skills storage location: `%APPDATA%\MiniAgent\skills\` (Windows) / `~/.config/mini-agent/skills/` (Linux), same auto-detect pattern as your other tools.
 
 ## Phase 1 — Project skeleton
@@ -16,7 +16,7 @@ OpenRouter/Kilo Code/DeepSeek's agent harness are the build-time tooling only; t
 mini-agent/
 ├── main.py              # entry point / CLI loop
 ├── config.py            # paths, model names, Ollama host — JSON persisted
-├── router.py            # talks to phi4-mini, owns the tool-calling loop
+├── router.py            # talks to qwen3:4b-instruct, owns the tool-calling loop
 ├── coder.py             # talks to qwen2.5-coder:3b, called AS a skill
 ├── skills/
 │   ├── __init__.py      # registry: auto-discovers skills, builds tools[] schema
@@ -52,7 +52,7 @@ SCHEMA = {
 
 ## Phase 2 — Router loop
 
-`router.py` does the standard tool-calling cycle against `phi4-mini`:
+`router.py` does the standard tool-calling cycle against `qwen3:4b-instruct`:
 1. Send user message + `TOOLS` list.
 2. If response has `tool_calls` → look up in `dispatch`, execute locally, feed result back as a `tool` role message, get final natural-language reply.
 3. If no tool call → just return the text (general chat / reasoning that doesn't need a tool).
@@ -63,7 +63,7 @@ SCHEMA = {
 
 ## Phase 4 — Two-tier speed optimization
 
-Once the basic loop works, add a cheap pre-filter in `main.py` before even calling Phi4-mini: regex/keyword match for very common deterministic commands ("list files in", "list folder"). If matched, call the skill directly and skip the router LLM call entirely. Falls back to the full router for anything ambiguous. This is the "if it's faster, run a Python script directly" behavior from your example — just made explicit and cheap rather than relying on the LLM to always decide correctly.
+Once the basic loop works, add a cheap pre-filter in `main.py` before even calling the router model: regex/keyword match for very common deterministic commands ("list files in", "list folder"). If matched, call the skill directly and skip the router LLM call entirely. Falls back to the full router for anything ambiguous. This is the "if it's faster, run a Python script directly" behavior from your example — just made explicit and cheap rather than relying on the LLM to always decide correctly.
 
 ## Phase 5 — Packaging & cross-platform testing
 
@@ -76,15 +76,28 @@ Once the basic loop works, add a cheap pre-filter in `main.py` before even calli
 Use them to *write and debug* the modules above — e.g. have Kilo Code (backed by an OpenRouter free model or DeepSeek's agent) scaffold `skills/__init__.py`'s auto-discovery logic, or debug a tricky PySide/CLI issue — same role Claude has played in your other projects, just an additional/parallel assistant. None of that code path touches the running mini-agent.
 
 
-## Notes on Phases 1 & 2
+## Router model notes
 
-Registry wiring works — all 4 tools discovered correctly. Now packaging it up.
+The registry wiring is verified end-to-end (imports run, `init_skills` binds config to the coder skill, all 4 tools auto-register), and the full router loop has been tested against live Ollama.
 
-Everything's syntax-checked and the skill registry wiring verified end-to-end (imports run, `init_skills` binds config to the coder skill, all 4 tools auto-register). To try it:
+The original plan used `phi4-mini` as the router. Tested live, it **does not emit structured tool calls**: it returns the call as raw text in `content` (e.g. `<|tool_call|>>{"files": ["README.md", ...]}`) with no `message.tool_calls` field, and it hallucinates the result. `router.py` relies on `message.get("tool_calls")`, so that silently fails and the agent returns garbage text.
+
+The real bottleneck on these machines is **CPU-only inference** — no discrete GPU (only integrated graphics), so Ollama runs every model in system RAM at ~5–6 tok/s. That makes *tokens generated per turn* the dominant cost, which rules out "thinking"/chain-of-thought models for the router (they reason aloud for hundreds of tokens before acting).
+
+| Router candidate | Size | Structured `tool_calls` | Tokens per tool call | Warm latency | Verdict |
+|------------------|------|-------------------------|----------------------|--------------|---------|
+| `phi4-mini` | 2.5 GB | ❌ (raw text) | — | — | broken |
+| `qwen3:4b` (Thinking) | 2.7 GB | ✅ | ~291 (verbose) | ~60–90 s | too slow |
+| **`qwen3:4b-instruct`** | **2.7 GB** | ✅ | **~34** | **~6.6 s** | **✅ chosen** |
+| `llama3.1:8b` | 4.9 GB | ✅ | ~30 | ~11 s | works, heavier |
+
+**`qwen3:4b-instruct` is the router.** It's the non-"Thinking" variant of Qwen3 4B — same weight as the thinking model, but it emits a minimal tool call instead of reasoning aloud, so it stays fast on CPU-only hardware. Cold start is ~30–45 s (model load into RAM); once warm, a tool-call turn is single-digit seconds.
+
+To try it:
 
 ```bash
 pip install -r requirements.txt
-ollama pull phi4-mini
+ollama pull qwen3:4b-instruct
 ollama pull qwen2.5-coder:3b
 python main.py
 ```
@@ -92,8 +105,5 @@ python main.py
 A few notes on what's in there:
 
 - **`try_fast_path` in `main.py`** only matches the "list files" phrasing right now (Phase 4's optimization). It's intentionally narrow — extend the regex or add more patterns as you find recurring commands worth short-circuiting.
-- **`router.py`**'s tool loop currently does one round of tool calls per turn (call tools → feed results back → final answer). If you later want the router to chain multiple tool calls in sequence (e.g. list files, then read one, then diagnose it, all without you re-prompting), that loop needs to become recursive — happy to extend it when you hit that need.
-- I didn't add error-message polish or logging yet (there's an empty `logs/` folder waiting) — wanted to keep this pass focused on the skeleton being structurally correct first.
-
-
-> AI tip: Bring back whatever breaks once you run it against real Ollama — untested against the actual models, only against the Python plumbing.
+- **`router.py`**'s tool loop currently does one round of tool calls per turn (call tools → feed results back → final answer). If you later want the router to chain multiple tool calls in sequence (e.g. list files, then read one, then diagnose it, all without you re-prompting), that loop needs to become recursive.
+- No logging or error-message polish yet — there's an empty `logs/` folder waiting for it.

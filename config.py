@@ -16,7 +16,7 @@ APP_NAME = "MiniAgent"
 
 DEFAULT_CONFIG = {
     "ollama_host": "http://localhost:11434",
-    "router_model": "phi4-mini",
+    "router_model": "qwen3:4b-instruct",
     "coder_model": "qwen2.5-coder:3b",
     "router_temperature": 0.2,
     "coder_temperature": 0.1,
