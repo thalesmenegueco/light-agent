@@ -8,9 +8,12 @@ Config lives at:
 """
 
 import json
+import logging
 import os
 import sys
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 APP_NAME = "MiniAgent"
 
@@ -21,6 +24,8 @@ DEFAULT_CONFIG = {
     "router_temperature": 0.2,
     "coder_temperature": 0.1,
     "max_history_messages": 12,   # keep the router's context small on limited hardware
+    "log_level": "INFO",          # DEBUG / INFO / WARNING / ERROR for mini-agent.log
+    "log_file": "",               # empty = <app_dir>/logs/mini-agent.log
 }
 
 
@@ -59,11 +64,16 @@ def load_config() -> dict:
         merged.update(data)
         return merged
     except (json.JSONDecodeError, OSError):
-        # Corrupted config: fall back to defaults rather than crashing.
+        # Corrupted config: fall back to defaults rather than crashing, but say so.
+        logger.warning("Corrupted config at %s; using defaults.", config_path)
         return dict(DEFAULT_CONFIG)
 
 
 def save_config(config: dict) -> None:
     base_dir = get_base_dir()
     base_dir.mkdir(parents=True, exist_ok=True)
-    (base_dir / "config.json").write_text(json.dumps(config, indent=2), encoding="utf-8")
+    path = base_dir / "config.json"
+    try:
+        path.write_text(json.dumps(config, indent=2), encoding="utf-8")
+    except OSError as exc:
+        logger.error("Could not save config to %s: %s", path, exc)

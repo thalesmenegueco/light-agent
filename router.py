@@ -6,10 +6,13 @@ locally via DISPATCH -> feed results back -> get final reply.
 """
 
 import json
+import logging
 
 import requests
 
 from skills import DISPATCH, TOOLS
+
+logger = logging.getLogger(__name__)
 
 SYSTEM_PROMPT = (
     "You are a lightweight local assistant running on limited hardware. "
@@ -65,10 +68,29 @@ def handle_message(config: dict, history: list[dict], user_message: str) -> tupl
         fn = call.get("function", {})
         name = fn.get("name")
         raw_args = fn.get("arguments", {})
-        args = raw_args if isinstance(raw_args, dict) else json.loads(raw_args or "{}")
+
+        if isinstance(raw_args, dict):
+            args = raw_args
+        else:
+            try:
+                args = json.loads(raw_args or "{}")
+            except json.JSONDecodeError as exc:
+                logger.error("Invalid tool arguments for %r: %s", name, exc)
+                args = {}
 
         func = DISPATCH.get(name)
-        result = func(**args) if func else {"error": f"Unknown tool: {name}"}
+        if func is None:
+            logger.error("Model requested unknown tool: %r", name)
+            result = {"error": f"Unknown tool: {name}"}
+        else:
+            try:
+                result = func(**args)
+            except TypeError as exc:
+                logger.error("Bad arguments for tool %r: %s (args=%r)", name, exc, args)
+                result = {"error": f"Bad arguments for {name}: {exc}"}
+            except Exception:
+                logger.exception("Tool %r raised an error", name)
+                result = {"error": f"Tool {name} failed; see the log file for details."}
 
         messages.append(
             {

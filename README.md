@@ -74,10 +74,12 @@ mini-agent/
 │   ├── search_skills.py  # search_files (find by name or grep content)
 │   └── code_skills.py    # run_coder(prompt, context) -> wraps coder.py
 ├── platform_utils.py    # pathlib-based OS dispatch (open file, etc.)
+├── logging_setup.py     # rotating file logging (logs/mini-agent.log)
 ├── demo.py              # offline showcase: runs every skill, no Ollama needed
 ├── tests/
-│   └── test_skills.py   # unittest suite for skills + fast path (no Ollama needed)
-└── logs/
+│   ├── test_skills.py   # unittest suite for skills + fast path (no Ollama needed)
+│   └── test_logging.py  # unittest suite for the logging setup
+└── logs/                # mini-agent.log written here at runtime
 ```
 
 **Skill contract** — every skill is a plain function + a schema dict, e.g.:
@@ -160,4 +162,4 @@ A few notes on what's in there:
 
 - **`try_fast_path` in `main.py`** now uses a small `_FAST_PATHS` table of `(regex, skill, arg_builder, formatter)` entries (Phase 4's optimization). It currently short-circuits "list files", "open", "search/grep for … in …", and "find files named … in …" straight to the deterministic skills, skipping the router LLM. Add a `FastPath` entry to extend it — anything that doesn't match (or whose skill errors) falls through to the full router.
 - **`router.py`**'s tool loop currently does one round of tool calls per turn (call tools → feed results back → final answer). If you later want the router to chain multiple tool calls in sequence (e.g. list files, then read one, then diagnose it, all without you re-prompting), that loop needs to become recursive.
-- No logging or error-message polish yet — there's an empty `logs/` folder waiting for it.
+- **Logging & error polish** — `logging_setup.py` routes diagnostics and errors to a rotating `logs/mini-agent.log` (1 MB, 3 backups). `log_file` and `log_level` in `config.json` override the location and verbosity. Stdout stays for user-facing output only; the router's tool dispatch, the CLI loop, and the OS opener all log unexpected errors instead of crashing or failing silently, and a corrupted `config.json` logs a warning while falling back to defaults.

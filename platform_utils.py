@@ -4,9 +4,12 @@ Small dispatch table for OS-specific behavior, so skills never branch on
 sys.platform directly. Add new OS-specific helpers here as skills need them.
 """
 
+import logging
 import subprocess
 import sys
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 
 def open_path(path: str) -> None:
@@ -14,11 +17,20 @@ def open_path(path: str) -> None:
     p = Path(path)
     if sys.platform == "win32":
         import os
-        os.startfile(str(p))  # noqa: S606 - intentional, Windows-only API
-    elif sys.platform == "darwin":
-        subprocess.run(["open", str(p)], check=False)
-    else:
-        subprocess.run(["xdg-open", str(p)], check=False)
+        try:
+            os.startfile(str(p))  # noqa: S606 - intentional, Windows-only API
+        except OSError as exc:
+            logger.warning("Could not open %r: %s", path, exc)
+        return
+
+    cmd = ["open", str(p)] if sys.platform == "darwin" else ["xdg-open", str(p)]
+    try:
+        proc = subprocess.run(cmd, check=False)
+    except OSError as exc:
+        logger.warning("Could not launch %r: %s", cmd, exc)
+        return
+    if proc.returncode != 0:
+        logger.warning("Opener %r exited with code %s", cmd, proc.returncode)
 
 
 def normalize_path(raw_path: str) -> Path:

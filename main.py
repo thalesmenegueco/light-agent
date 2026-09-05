@@ -5,6 +5,7 @@ CLI entry point for mini-agent.
 Run: python main.py
 """
 
+import logging
 import re
 import sys
 from typing import Callable, NamedTuple
@@ -12,8 +13,11 @@ from typing import Callable, NamedTuple
 import requests
 
 from config import load_config
+from logging_setup import setup_logging
 from router import handle_message
 from skills import DISPATCH, init_skills
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -163,7 +167,11 @@ def check_ollama(config: dict) -> bool:
         resp = requests.get(f"{config['ollama_host']}/api/tags", timeout=5)
         resp.raise_for_status()
         return True
-    except requests.RequestException:
+    except requests.RequestException as exc:
+        logger.warning("Ollama health check failed: %s", exc)
+        return False
+    except Exception:
+        logger.exception("Unexpected error during Ollama health check")
         return False
 
 
@@ -171,10 +179,15 @@ def main() -> None:
     config = load_config()
     init_skills(config)
 
+    log_file = setup_logging(config)
+    logger.info("mini-agent starting (log file: %s)", log_file)
+
     if not check_ollama(config):
+        logger.error("Ollama unreachable at %s", config["ollama_host"])
         print(
             f"Could not reach Ollama at {config['ollama_host']}.\n"
-            "Make sure Ollama is installed and running, then try again."
+            "Make sure Ollama is installed and running, then try again.",
+            file=sys.stderr,
         )
         sys.exit(1)
 
@@ -203,7 +216,15 @@ def main() -> None:
         try:
             reply, history = handle_message(config, history, user_message)
         except requests.RequestException as exc:
-            print(f"[Ollama error] {exc}")
+            logger.error("Ollama request failed: %s", exc)
+            print(f"[Ollama error] Could not reach the model: {exc}", file=sys.stderr)
+            continue
+        except Exception:
+            logger.exception("Unhandled error while processing: %r", user_message)
+            print(
+                "[error] Something went wrong. Details were written to the log file.",
+                file=sys.stderr,
+            )
             continue
 
         # Keep context small for the router on limited hardware.
