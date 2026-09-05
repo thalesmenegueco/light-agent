@@ -10,9 +10,9 @@ That's it -- TOOLS and DISPATCH update automatically, and router.py
 never needs to change.
 """
 
-from . import code_skills, fs_skills, search_skills
+from . import code_skills, fs_skills, git_skills, meta_skills, search_skills
 
-_SKILL_MODULES = [fs_skills, code_skills, search_skills]
+_SKILL_MODULES = [fs_skills, search_skills, git_skills, code_skills, meta_skills]
 
 TOOLS: list[dict] = []
 DISPATCH: dict[str, callable] = {}
@@ -24,5 +24,6 @@ for _module in _SKILL_MODULES:
 
 
 def init_skills(config: dict) -> None:
-    """Call once at startup to hand config to skills that need it (e.g. coder)."""
+    """Call once at startup to hand config to skills that need it (coder, meta)."""
     code_skills.bind_config(config)
+    meta_skills.bind_config(config)

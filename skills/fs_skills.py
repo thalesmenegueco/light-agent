@@ -90,6 +90,47 @@ def append_file(path: str, content: str) -> dict:
     return {"appended_to": str(p)}
 
 
+def replace_in_file(path: str, old: str, new: str, replace_all: bool = False) -> dict:
+    """Replace the first occurrence (or all) of `old` with `new` in a text file.
+
+    Refuses ambiguous edits: if `old` appears more than once and `replace_all`
+    is false, returns an error so the caller can provide a more specific match.
+    """
+    p = normalize_path(path)
+    if not p.exists():
+        return {"error": f"File not found: {p}"}
+    if not p.is_file():
+        return {"error": f"Not a file: {p}"}
+    if not old:
+        return {"error": "old must not be empty"}
+
+    try:
+        text = p.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        return {"error": f"Not a UTF-8 text file: {p}"}
+    except OSError as exc:
+        return {"error": f"Could not read file: {exc}"}
+
+    occurrences = text.count(old)
+    if occurrences == 0:
+        return {"error": f"Text not found in {p}: {old!r}"}
+    if occurrences > 1 and not replace_all:
+        return {
+            "error": (
+                f"Text appears {occurrences} times in {p}. "
+                "Provide a more specific `old` string, or set replace_all=true."
+            )
+        }
+
+    new_text = text.replace(old, new) if replace_all else text.replace(old, new, 1)
+    try:
+        p.write_text(new_text, encoding="utf-8")
+    except OSError as exc:
+        return {"error": f"Write failed: {exc}"}
+
+    return {"path": str(p), "replacements": occurrences if replace_all else 1}
+
+
 def open_file(path: str) -> dict:
     """Open a file or folder with the OS default application."""
     p = normalize_path(path)
@@ -192,6 +233,36 @@ SCHEMAS = [
             },
         },
         append_file,
+    ),
+    (
+        {
+            "type": "function",
+            "function": {
+                "name": "replace_in_file",
+                "description": (
+                    "Replace text in a file: the first occurrence by default, or every "
+                    "occurrence when replace_all is true. Refuses ambiguous edits when "
+                    "the text appears multiple times and replace_all is false."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "File path to edit."},
+                        "old": {
+                            "type": "string",
+                            "description": "Exact text to find (must be unique unless replace_all is true).",
+                        },
+                        "new": {"type": "string", "description": "Replacement text."},
+                        "replace_all": {
+                            "type": "boolean",
+                            "description": "Replace every occurrence instead of just the first. Defaults to false.",
+                        },
+                    },
+                    "required": ["path", "old", "new"],
+                },
+            },
+        },
+        replace_in_file,
     ),
     (
         {

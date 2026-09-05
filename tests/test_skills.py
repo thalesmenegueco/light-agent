@@ -20,12 +20,19 @@ from skills import DISPATCH, TOOLS
 
 EXPECTED_TOOLS = {
     "append_file",
+    "get_config",
+    "git_diff",
+    "git_log",
+    "git_status",
     "list_files",
+    "list_skills",
     "move_file",
     "open_file",
     "read_file",
+    "replace_in_file",
     "run_coder",
     "search_files",
+    "set_config",
     "write_file",
 }
 
@@ -133,6 +140,48 @@ class TestFsSkills(unittest.TestCase):
     # open_file -- only the error path, so tests never launch an OS app
     def test_open_file_missing(self):
         result = DISPATCH["open_file"](path=str(self.root / "nope.txt"))
+        self.assertIn("error", result)
+
+
+class TestReplaceFile(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+        self.file = self.root / "code.py"
+        self.file.write_text("x = 1\ny = 2\nx = 3\n", encoding="utf-8")
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_replaces_single_occurrence(self):
+        result = DISPATCH["replace_in_file"](path=str(self.file), old="y = 2", new="y = 22")
+        self.assertEqual(result.get("replacements"), 1)
+        self.assertEqual(self.file.read_text(encoding="utf-8"), "x = 1\ny = 22\nx = 3\n")
+
+    def test_replace_all(self):
+        result = DISPATCH["replace_in_file"](
+            path=str(self.file), old="x =", new="xx =", replace_all=True
+        )
+        self.assertEqual(result.get("replacements"), 2)
+        self.assertEqual(self.file.read_text(encoding="utf-8"), "xx = 1\ny = 2\nxx = 3\n")
+
+    def test_ambiguous_without_replace_all(self):
+        result = DISPATCH["replace_in_file"](path=str(self.file), old="x =", new="xx =")
+        self.assertIn("error", result)
+        self.assertEqual(self.file.read_text(encoding="utf-8"), "x = 1\ny = 2\nx = 3\n")
+
+    def test_missing_text(self):
+        result = DISPATCH["replace_in_file"](path=str(self.file), old="nope", new="x")
+        self.assertIn("error", result)
+
+    def test_missing_file(self):
+        result = DISPATCH["replace_in_file"](
+            path=str(self.root / "nope.py"), old="a", new="b"
+        )
+        self.assertIn("error", result)
+
+    def test_empty_old(self):
+        result = DISPATCH["replace_in_file"](path=str(self.file), old="", new="b")
         self.assertIn("error", result)
 
 

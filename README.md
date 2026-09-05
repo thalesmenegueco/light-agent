@@ -14,8 +14,9 @@ python demo.py        # or: python3 demo.py
 
 Builds a throwaway sandbox and exercises every deterministic skill
 (`list_files`, `read_file`, `write_file`, `append_file`, `move_file`,
-`open_file`, `search_files`) plus the fast-path matcher, so you can see what
-the agent can do without waiting for a model to load (~30–45 s cold).
+`replace_in_file`, `open_file`, `search_files`) plus the fast-path matcher,
+so you can see what the agent can do without waiting for a model to load
+(~30–45 s cold). The git and meta skills are covered by the unit tests.
 
 **Run the unit tests (stdlib `unittest`, no Ollama needed):**
 
@@ -38,6 +39,9 @@ Then try:
 - `open README.md`
 - `search for normalize_path in .`
 - `find files named config in .`
+- `replace "could not reach" with "cannot reach" in main.py`  (deterministic edit)
+- `what's the git status?` / `show me the latest commits` / `diff the working tree`
+- `what can you do?`  (lists skills) / `what config are you using?`
 - `write a hello.py file that prints hello`  (router + coder model)
 - `why isn't this working?`  (delegates to the coder model)
 
@@ -50,8 +54,15 @@ Then try:
 | `write_file` | deterministic | Create / overwrite a text file |
 | `append_file` | deterministic | Append text to a file |
 | `move_file` | deterministic | Move / rename a file |
+| `replace_in_file` | deterministic | Replace text in a file (first occurrence, or all with `replace_all=true`) |
 | `open_file` | deterministic | Open a file or folder in the OS default app |
 | `search_files` | deterministic | Find files by name or grep text inside files |
+| `git_status` | deterministic (read-only) | Show branch + working-tree status |
+| `git_diff` | deterministic (read-only) | Unified diff of working-tree / staged changes |
+| `git_log` | deterministic (read-only) | Recent commit history, one line per commit |
+| `list_skills` | deterministic | List every available tool with its description |
+| `get_config` | deterministic | Read the current runtime config |
+| `set_config` | deterministic | Validate, apply, and persist config changes |
 | `run_coder` | LLM (coder leaf) | Write / review / debug code via `qwen2.5-coder:3b` |
 
 ## Phase 0 — Foundations (before any agent logic)
@@ -70,14 +81,18 @@ mini-agent/
 ├── coder.py             # talks to qwen2.5-coder:3b, called AS a skill
 ├── skills/
 │   ├── __init__.py      # registry: auto-discovers skills, builds tools[] schema
-│   ├── fs_skills.py      # list_files, read_file, move_file, write_file, append_file, open_file
+│   ├── fs_skills.py      # list_files, read_file, move_file, write_file, append_file, replace_in_file, open_file
 │   ├── search_skills.py  # search_files (find by name or grep content)
-│   └── code_skills.py    # run_coder(prompt, context) -> wraps coder.py
+│   ├── git_skills.py     # git_status, git_diff, git_log (read-only)
+│   ├── code_skills.py    # run_coder(prompt, context) -> wraps coder.py
+│   └── meta_skills.py    # list_skills, get_config, set_config
 ├── platform_utils.py    # pathlib-based OS dispatch (open file, etc.)
 ├── logging_setup.py     # rotating file logging (logs/mini-agent.log)
 ├── demo.py              # offline showcase: runs every skill, no Ollama needed
 ├── tests/
 │   ├── test_skills.py   # unittest suite for skills + fast path (no Ollama needed)
+│   ├── test_git_skills.py  # unittest suite for the read-only git skills
+│   ├── test_meta_skills.py # unittest suite for the meta skills
 │   └── test_logging.py  # unittest suite for the logging setup
 └── logs/                # mini-agent.log written here at runtime
 ```

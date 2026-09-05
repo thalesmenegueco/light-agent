@@ -70,6 +70,10 @@ def main() -> None:
     )
     _show("read_file(sandbox/notes.txt)", DISPATCH["read_file"](path=str(sandbox / "notes.txt")))
     _show(
+        "replace_in_file(sandbox/notes.txt, 'hello' -> 'hi')",
+        DISPATCH["replace_in_file"](path=str(sandbox / "notes.txt"), old="hello", new="hi"),
+    )
+    _show(
         "write_file(sandbox/notes.txt) again -- no overwrite",
         DISPATCH["write_file"](path=str(sandbox / "notes.txt"), content="x"),
     )
