@@ -7,6 +7,7 @@ Run: python main.py
 
 import re
 import sys
+from typing import Callable, NamedTuple
 
 import requests
 
@@ -14,29 +15,147 @@ from config import load_config
 from router import handle_message
 from skills import DISPATCH, init_skills
 
-# Quick keyword prefilter for very common deterministic requests, so we can
-# skip the router LLM call entirely for the most frequent commands.
-# This is an optimization, not a requirement -- anything not matched here
+
+# ---------------------------------------------------------------------------
+# Fast path: a table of (pattern, skill, build_args, format_result) entries.
+#
+# Each entry short-circuits a very common, deterministic request straight to a
+# skill, skipping the router LLM call entirely. This is an optimization, not a
+# requirement -- anything that doesn't match (or whose skill returns an error)
 # falls through to the full router, which can still call the same skills.
-_LIST_FILES_PATTERN = re.compile(
-    r"(?:list|show|what are)\s+(?:the\s+)?(?:files?|names? of files?)\s+.*?"
-    r"(?:in|inside|of|from)\s+['\"]?(?P<path>[^'\"]+)['\"]?\s*$",
-    re.IGNORECASE,
-)
+#
+#   build_args(match)   -> dict          kwargs for DISPATCH[skill]
+#   format_result(result) -> str | None  None means "fall through to router"
+# ---------------------------------------------------------------------------
+
+
+class FastPath(NamedTuple):
+    pattern: re.Pattern
+    skill: str
+    build_args: Callable
+    format_result: Callable
+
+
+def _build_list_files_args(match) -> dict:
+    return {"path": match.group("path").strip()}
+
+
+def _format_list_files(result: dict) -> str | None:
+    if "error" in result:
+        return None
+    lines = [f"Files in {result['path']}:"]
+    files = result.get("files", [])
+    if files:
+        lines += [f"  - {name}" for name in files]
+    else:
+        lines.append("  (no files)")
+    return "\n".join(lines)
+
+
+def _build_open_args(match) -> dict:
+    return {"path": match.group("path").strip()}
+
+
+def _format_open(result: dict) -> str | None:
+    if "error" in result:
+        return None
+    return f"Opened {result['opened']}"
+
+
+def _build_search_content_args(match) -> dict:
+    return {
+        "path": match.group("path").strip(),
+        "query": match.group("query").strip(),
+        "mode": "content",
+    }
+
+
+def _build_search_name_args(match) -> dict:
+    return {
+        "path": match.group("path").strip(),
+        "query": match.group("query").strip(),
+        "mode": "name",
+    }
+
+
+def _format_search(result: dict) -> str | None:
+    if "error" in result:
+        return None
+    count = result.get("count", 0)
+    if count == 0:
+        return f"No matches for {result['query']!r} in {result['path']}."
+    lines = [f"Found {count} match(es) for {result['query']!r} in {result['path']}:"]
+    for match in result.get("matches", []):
+        lines.append(f"  {match['file']}:{match['line']}: {match['text']}")
+    for file_path in result.get("files", []):
+        lines.append(f"  {file_path}")
+    if result.get("truncated"):
+        lines.append("  (results truncated)")
+    return "\n".join(lines)
+
+
+_FAST_PATHS: list[FastPath] = [
+    # "list files in <path>"
+    FastPath(
+        re.compile(
+            r"(?:list|show|what are)\s+(?:the\s+)?(?:files?|names? of files?)\s+.*?"
+            r"(?:in|inside|of|from)\s+['\"]?(?P<path>[^'\"]+)['\"]?\s*$",
+            re.IGNORECASE,
+        ),
+        "list_files",
+        _build_list_files_args,
+        _format_list_files,
+    ),
+    # "open <path>" / "open the folder <path>"
+    FastPath(
+        re.compile(
+            r"^(?:please\s+)?(?:open|open up|launch)\s+(?:the\s+)?"
+            r"(?:file\s+|folder\s+|directory\s+)?['\"]?(?P<path>.+?)['\"]?\s*$",
+            re.IGNORECASE,
+        ),
+        "open_file",
+        _build_open_args,
+        _format_open,
+    ),
+    # "search for <query> in <path>" / "grep for <query> in <path>"
+    FastPath(
+        re.compile(
+            r"^(?:please\s+)?(?:search|grep|look)\s+for\s+['\"]?(?P<query>.+?)['\"]?"
+            r"\s+(?:in|inside|within)\s+['\"]?(?P<path>[^'\"]+?)['\"]?\s*$",
+            re.IGNORECASE,
+        ),
+        "search_files",
+        _build_search_content_args,
+        _format_search,
+    ),
+    # "find files named <query> in <path>"
+    FastPath(
+        re.compile(
+            r"^(?:please\s+)?(?:find|list|show)\s+(?:files?|folders?)\s+"
+            r"(?:named|called|matching)\s+['\"]?(?P<query>.+?)['\"]?"
+            r"\s+(?:in|inside|within)\s+['\"]?(?P<path>[^'\"]+?)['\"]?\s*$",
+            re.IGNORECASE,
+        ),
+        "search_files",
+        _build_search_name_args,
+        _format_search,
+    ),
+]
 
 
 def try_fast_path(user_message: str):
     """Return a result string if a deterministic fast-path matched, else None."""
-    match = _LIST_FILES_PATTERN.search(user_message.strip())
-    if not match:
-        return None
-    path = match.group("path").strip()
-    result = DISPATCH["list_files"](path=path)
-    if "error" in result:
-        return None  # let the full router handle ambiguous/failed cases
-    lines = [f"Files in {result['path']}:"]
-    lines += [f"  - {name}" for name in result["files"]] or ["  (no files)"]
-    return "\n".join(lines)
+    message = user_message.strip()
+    for entry in _FAST_PATHS:
+        match = entry.pattern.search(message)
+        if not match:
+            continue
+        args = entry.build_args(match)
+        result = DISPATCH[entry.skill](**args)
+        rendered = entry.format_result(result)
+        if rendered is not None:
+            return rendered
+    return None
 
 
 def check_ollama(config: dict) -> bool:

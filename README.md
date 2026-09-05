@@ -4,6 +4,56 @@
 
 OpenRouter/Kilo Code/DeepSeek's agent harness are the build-time tooling only; the running agent stays 100% local via Ollama. Here's the plan.
 
+## Try it now
+
+**Offline demo — no Ollama needed:**
+
+```bash
+python demo.py        # or: python3 demo.py
+```
+
+Builds a throwaway sandbox and exercises every deterministic skill
+(`list_files`, `read_file`, `write_file`, `append_file`, `move_file`,
+`open_file`, `search_files`) plus the fast-path matcher, so you can see what
+the agent can do without waiting for a model to load (~30–45 s cold).
+
+**Run the unit tests (stdlib `unittest`, no Ollama needed):**
+
+```bash
+python -m unittest        # or: python -m unittest discover -s tests -v
+```
+
+**Full agent — needs Ollama running:**
+
+```bash
+pip install -r requirements.txt
+ollama pull qwen3:4b-instruct
+ollama pull qwen2.5-coder:3b
+python main.py
+```
+
+Then try:
+
+- `list files in .`
+- `open README.md`
+- `search for normalize_path in .`
+- `find files named config in .`
+- `write a hello.py file that prints hello`  (router + coder model)
+- `why isn't this working?`  (delegates to the coder model)
+
+## Current skills
+
+| Skill | Kind | What it does |
+|-------|------|--------------|
+| `list_files` | deterministic | List files and folders in a directory |
+| `read_file` | deterministic | Read a text file (truncated at 8000 chars) |
+| `write_file` | deterministic | Create / overwrite a text file |
+| `append_file` | deterministic | Append text to a file |
+| `move_file` | deterministic | Move / rename a file |
+| `open_file` | deterministic | Open a file or folder in the OS default app |
+| `search_files` | deterministic | Find files by name or grep text inside files |
+| `run_coder` | LLM (coder leaf) | Write / review / debug code via `qwen2.5-coder:3b` |
+
 ## Phase 0 — Foundations (before any agent logic)
 
 - Install Ollama on both machines, pull `qwen3:4b-instruct` (router) and `qwen2.5-coder:3b` (coder).
@@ -20,9 +70,13 @@ mini-agent/
 ├── coder.py             # talks to qwen2.5-coder:3b, called AS a skill
 ├── skills/
 │   ├── __init__.py      # registry: auto-discovers skills, builds tools[] schema
-│   ├── fs_skills.py      # list_files, read_file, move_file, etc.
+│   ├── fs_skills.py      # list_files, read_file, move_file, write_file, append_file, open_file
+│   ├── search_skills.py  # search_files (find by name or grep content)
 │   └── code_skills.py    # run_coder(prompt, context) -> wraps coder.py
 ├── platform_utils.py    # pathlib-based OS dispatch (open file, etc.)
+├── demo.py              # offline showcase: runs every skill, no Ollama needed
+├── tests/
+│   └── test_skills.py   # unittest suite for skills + fast path (no Ollama needed)
 └── logs/
 ```
 
@@ -78,7 +132,7 @@ Use them to *write and debug* the modules above — e.g. have Kilo Code (backed 
 
 ## Router model notes
 
-The registry wiring is verified end-to-end (imports run, `init_skills` binds config to the coder skill, all 4 tools auto-register), and the full router loop has been tested against live Ollama.
+The registry wiring is verified end-to-end (imports run, `init_skills` binds config to the coder skill, all 8 tools auto-register), and the full router loop has been tested against live Ollama.
 
 The original plan used `phi4-mini` as the router. Tested live, it **does not emit structured tool calls**: it returns the call as raw text in `content` (e.g. `<|tool_call|>>{"files": ["README.md", ...]}`) with no `message.tool_calls` field, and it hallucinates the result. `router.py` relies on `message.get("tool_calls")`, so that silently fails and the agent returns garbage text.
 
@@ -104,6 +158,6 @@ python main.py
 
 A few notes on what's in there:
 
-- **`try_fast_path` in `main.py`** only matches the "list files" phrasing right now (Phase 4's optimization). It's intentionally narrow — extend the regex or add more patterns as you find recurring commands worth short-circuiting.
+- **`try_fast_path` in `main.py`** now uses a small `_FAST_PATHS` table of `(regex, skill, arg_builder, formatter)` entries (Phase 4's optimization). It currently short-circuits "list files", "open", "search/grep for … in …", and "find files named … in …" straight to the deterministic skills, skipping the router LLM. Add a `FastPath` entry to extend it — anything that doesn't match (or whose skill errors) falls through to the full router.
 - **`router.py`**'s tool loop currently does one round of tool calls per turn (call tools → feed results back → final answer). If you later want the router to chain multiple tool calls in sequence (e.g. list files, then read one, then diagnose it, all without you re-prompting), that loop needs to become recursive.
 - No logging or error-message polish yet — there's an empty `logs/` folder waiting for it.

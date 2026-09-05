@@ -10,9 +10,9 @@ That's it -- TOOLS and DISPATCH update automatically, and router.py
 never needs to change.
 """
 
-from . import code_skills, fs_skills
+from . import code_skills, fs_skills, search_skills
 
-_SKILL_MODULES = [fs_skills, code_skills]
+_SKILL_MODULES = [fs_skills, code_skills, search_skills]
 
 TOOLS: list[dict] = []
 DISPATCH: dict[str, callable] = {}
