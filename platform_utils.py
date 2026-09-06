@@ -5,6 +5,7 @@ sys.platform directly. Add new OS-specific helpers here as skills need them.
 """
 
 import logging
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -36,3 +37,8 @@ def open_path(path: str) -> None:
 def normalize_path(raw_path: str) -> Path:
     """Expand ~ and environment vars, resolve to an absolute Path."""
     return Path(raw_path).expanduser().resolve()
+
+
+def split_command(command: str) -> list[str]:
+    """Split a command line into argv (shell=False), honoring OS quoting rules."""
+    return shlex.split(command, posix=(sys.platform != "win32"))

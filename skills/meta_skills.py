@@ -13,10 +13,13 @@ from config import DEFAULT_CONFIG, save_config
 
 _CONFIG = None
 
-_INT_KEYS = {"max_history_messages"}
+_INT_KEYS = {"max_history_messages", "run_command_timeout", "run_command_max_output"}
 _NUM_KEYS = {"router_temperature", "coder_temperature"}
-_STR_KEYS = {"ollama_host", "router_model", "coder_model", "log_file"}
+_STR_KEYS = {"ollama_host", "router_model", "coder_model", "log_file", "run_command_cwd"}
 _LOG_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR"}
+_BOOL_KEYS = {"run_command_shell", "run_command_allow_network"}
+_LIST_STR_KEYS = {"run_command_allowlist", "run_command_denylist"}
+_RUN_COMMAND_MODES = {"off", "confirm", "allowlist", "auto"}
 
 
 def bind_config(config: dict) -> None:
@@ -66,8 +69,17 @@ def set_config(updates: dict) -> dict:
     for key in _STR_KEYS & set(updates):
         if not isinstance(updates[key], str):
             return {"error": f"{key} must be a string"}
+    for key in _BOOL_KEYS & set(updates):
+        if not isinstance(updates[key], bool):
+            return {"error": f"{key} must be a boolean"}
+    for key in _LIST_STR_KEYS & set(updates):
+        value = updates[key]
+        if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
+            return {"error": f"{key} must be a list of strings"}
     if "log_level" in updates and str(updates["log_level"]).upper() not in _LOG_LEVELS:
         return {"error": f"log_level must be one of {sorted(_LOG_LEVELS)}"}
+    if "run_command_mode" in updates and updates["run_command_mode"] not in _RUN_COMMAND_MODES:
+        return {"error": f"run_command_mode must be one of {sorted(_RUN_COMMAND_MODES)}"}
 
     _CONFIG.update(updates)
     save_config(_CONFIG)
@@ -112,7 +124,7 @@ SCHEMAS = [
                     "Update one or more configuration values and persist them to disk. "
                     "Known keys: ollama_host, router_model, coder_model, "
                     "router_temperature, coder_temperature, max_history_messages, "
-                    "log_level, log_file."
+                    "log_level, log_file, and run_command_* safety settings."
                 ),
                 "parameters": {
                     "type": "object",

@@ -15,7 +15,7 @@ import requests
 from config import load_config
 from logging_setup import setup_logging
 from router import handle_message
-from skills import DISPATCH, init_skills
+from skills import DISPATCH, init_skills, run_command_skills
 
 logger = logging.getLogger(__name__)
 
@@ -178,6 +178,9 @@ def check_ollama(config: dict) -> bool:
 def main() -> None:
     config = load_config()
     init_skills(config)
+    # Bind the interactive confirmation prompt for run_command. It stays inert
+    # while run_command_mode is "off" (the default); the user opts in via config.
+    run_command_skills.bind_confirmer(run_command_skills.terminal_confirmer)
 
     log_file = setup_logging(config)
     logger.info("mini-agent starting (log file: %s)", log_file)

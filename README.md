@@ -64,6 +64,19 @@ Then try:
 | `get_config` | deterministic | Read the current runtime config |
 | `set_config` | deterministic | Validate, apply, and persist config changes |
 | `run_coder` | LLM (coder leaf) | Write / review / debug code via `qwen2.5-coder:3b` |
+| `run_command` | deterministic (gated) | Run a local command under a deny-by-default safety policy (off by default) |
+
+### `run_command` safety model
+
+`run_command` executes a local command but ships **disabled** (`run_command_mode: "off"`); enabling it is a deliberate opt-in. Every request passes through a deny-by-default pipeline before anything runs:
+
+1. **denylist** — destructive patterns (`rm -rf /`, `mkfs`, `dd … of=/dev/…`, shutdown, fork bomb) are refused outright.
+2. **no eval** — interpreter `-c`/`-e` escapes (`python -c`, `sh -c`) are refused.
+3. **no TTY** — interactive/privileged programs (`vim`, `sudo`, `ssh`, pagers) are refused.
+4. **no network** — `curl`, `pip`, `git push`, etc. are refused unless `run_command_allow_network` is set.
+5. **human confirmation** — anything else prompts with the exact command + cwd (fail-closed if no confirmer is bound); "always allow" persists the program to the allowlist.
+
+The model only ever sees `command` and `cwd`; shell, timeout, allowlist, denylist, network and cwd-confinement are config-side. Modes: `off` → `confirm` → `allowlist` → `auto`.
 
 ## Phase 0 — Foundations (before any agent logic)
 
@@ -149,7 +162,7 @@ Use them to *write and debug* the modules above — e.g. have Kilo Code (backed 
 
 ## Router model notes
 
-The registry wiring is verified end-to-end (imports run, `init_skills` binds config to the coder skill, all 8 tools auto-register), and the full router loop has been tested against live Ollama.
+The registry wiring is verified end-to-end (imports run, `init_skills` binds config to the coder skill, all 16 tools auto-register), and the full router loop has been tested against live Ollama.
 
 The original plan used `phi4-mini` as the router. Tested live, it **does not emit structured tool calls**: it returns the call as raw text in `content` (e.g. `<|tool_call|>>{"files": ["README.md", ...]}`) with no `message.tool_calls` field, and it hallucinates the result. `router.py` relies on `message.get("tool_calls")`, so that silently fails and the agent returns garbage text.
 

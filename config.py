@@ -26,6 +26,15 @@ DEFAULT_CONFIG = {
     "max_history_messages": 12,   # keep the router's context small on limited hardware
     "log_level": "INFO",          # DEBUG / INFO / WARNING / ERROR for mini-agent.log
     "log_file": "",               # empty = <app_dir>/logs/mini-agent.log
+    # run_command safety policy (see skills/run_command_skills.py)
+    "run_command_mode": "off",           # off | confirm | allowlist | auto
+    "run_command_allowlist": [],         # program names allowed without confirmation
+    "run_command_denylist": [],          # extra refusal literals, merged with built-ins
+    "run_command_timeout": 30,           # seconds before a command is killed
+    "run_command_max_output": 8000,      # chars, per stdout and stderr
+    "run_command_cwd": "",               # "" = inherit; else fixed working directory
+    "run_command_shell": False,          # allow shell operators at all
+    "run_command_allow_network": False,  # allow network-touching programs
 }
 
 
