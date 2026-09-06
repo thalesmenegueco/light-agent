@@ -5,6 +5,7 @@ CLI entry point for mini-agent.
 Run: python main.py
 """
 
+import argparse
 import logging
 import re
 import sys
@@ -14,7 +15,7 @@ import requests
 
 from config import load_config
 from logging_setup import setup_logging
-from router import handle_message
+from router import handle_message, warm_up
 from skills import DISPATCH, init_skills, run_command_skills
 
 logger = logging.getLogger(__name__)
@@ -98,6 +99,89 @@ def _format_search(result: dict) -> str | None:
     return "\n".join(lines)
 
 
+def _build_no_args(match) -> dict:
+    return {}
+
+
+def _build_git_path_args(match) -> dict:
+    path = match.groupdict().get("path")
+    return {"path": path.strip()} if path else {}
+
+
+def _build_git_log_args(match) -> dict:
+    args = {}
+    count = match.groupdict().get("count")
+    if count:
+        args["max_count"] = int(count)
+    path = match.groupdict().get("path")
+    if path:
+        args["path"] = path.strip()
+    return args
+
+
+def _build_git_diff_args(match) -> dict:
+    args = {"staged": bool(match.groupdict().get("staged"))}
+    path = match.groupdict().get("path")
+    if path:
+        args["path"] = path.strip()
+    return args
+
+
+def _build_read_file_args(match) -> dict:
+    return {"path": match.group("path").strip()}
+
+
+def _format_git_status(result: dict) -> str | None:
+    if "error" in result:
+        return None
+    status = result.get("status", "").rstrip()
+    header = f"Git status ({result.get('path', '.')}):"
+    body = status if status else "(clean working tree)"
+    return f"{header}\n{body}"
+
+
+def _format_git_log(result: dict) -> str | None:
+    if "error" in result:
+        return None
+    log = result.get("log", "").rstrip()
+    header = f"Recent commits ({result.get('path', '.')}):"
+    body = log if log else "(no commits)"
+    suffix = "\n[truncated]" if result.get("truncated") else ""
+    return f"{header}\n{body}{suffix}"
+
+
+def _format_git_diff(result: dict) -> str | None:
+    if "error" in result:
+        return None
+    diff = result.get("diff", "")
+    label = "staged changes" if result.get("staged") else "working-tree changes"
+    if not diff.strip():
+        return f"No {label}."
+    suffix = "\n[truncated]" if result.get("truncated") else ""
+    return f"Diff of {label}:\n{diff}{suffix}"
+
+
+def _format_list_skills(result: dict) -> str | None:
+    if "error" in result:
+        return None
+    skills = result.get("skills", [])
+    lines = [f"I can use {result.get('count', len(skills))} tools:"]
+    for skill in skills:
+        name = skill.get("name", "")
+        desc = " ".join(skill.get("description", "").split())
+        lines.append(f"  - {name}: {desc}")
+    return "\n".join(lines)
+
+
+def _format_read_file(result: dict) -> str | None:
+    if "error" in result:
+        return None
+    content = result.get("content", "")
+    header = f"--- {result.get('path', '')} ---"
+    suffix = "\n[truncated]" if result.get("truncated") else ""
+    return f"{header}\n{content}{suffix}"
+
+
 _FAST_PATHS: list[FastPath] = [
     # "list files in <path>"
     FastPath(
@@ -144,6 +228,90 @@ _FAST_PATHS: list[FastPath] = [
         _build_search_name_args,
         _format_search,
     ),
+    # "git status" / "what's the git status?" / "what changed?" (optional "in <path>")
+    FastPath(
+        re.compile(
+            r"^(?:please\s+)?(?:git\s+status"
+            r"|(?:what(?:'s| is)\s+)?(?:the\s+)?git\s+status"
+            r"|what(?:'s| is)\s+(?:the\s+)?status"
+            r"|what(?:'s| is)\s+changed"
+            r"|working\s+tree\s+status)"
+            r"(?:\s+in\s+['\"]?(?P<path>.+?)['\"]?)?"
+            r"[?.!]?\s*$",
+            re.IGNORECASE,
+        ),
+        "git_status",
+        _build_git_path_args,
+        _format_git_status,
+    ),
+    # "git log" / "show me the latest commits" / "last 5 commits" / "commit history"
+    FastPath(
+        re.compile(
+            r"^(?:please\s+)?(?:git\s+log"
+            r"|(?:show\s+(?:me\s+)?)?(?:the\s+)?(?:latest|recent|last|current)\s+(?:(?P<count>\d+)\s+)?commits"
+            r"|(?:show\s+(?:me\s+)?)?(?:the\s+)?(?:commit\s+history|commits))"
+            r"(?:\s+in\s+['\"]?(?P<path>.+?)['\"]?)?"
+            r"[?.!]?\s*$",
+            re.IGNORECASE,
+        ),
+        "git_log",
+        _build_git_log_args,
+        _format_git_log,
+    ),
+    # "git diff" / "show me the diff" / "diff the working tree" (optional "staged", "in <path>")
+    FastPath(
+        re.compile(
+            r"^(?:please\s+)?(?:git\s+diff"
+            r"|(?:show\s+(?:me\s+)?(?:the\s+)?diff)"
+            r"|diff\s+the\s+working\s+tree"
+            r"|what(?:'s| is)\s+(?:the\s+)?diff)"
+            r"(?:\s+(?P<staged>--staged|staged))?"
+            r"(?:\s+in\s+['\"]?(?P<path>.+?)['\"]?)?"
+            r"[?.!]?\s*$",
+            re.IGNORECASE,
+        ),
+        "git_diff",
+        _build_git_diff_args,
+        _format_git_diff,
+    ),
+    # "what can you do?" / "list skills" / "help"
+    FastPath(
+        re.compile(
+            r"^(?:please\s+)?(?:what\s+can\s+(?:you|i)\s+do"
+            r"|show\s+me\s+what\s+you\s+can\s+do"
+            r"|list\s+(?:your\s+)?(?:skills|tools)"
+            r"|what\s+tools\s+(?:do\s+you\s+have|are\s+available)"
+            r"|what\s+are\s+you\s+capable\s+of"
+            r"|help)"
+            r"[?.!]?\s*$",
+            re.IGNORECASE,
+        ),
+        "list_skills",
+        _build_no_args,
+        _format_list_skills,
+    ),
+    # "read <path>" / "cat <path>" / "show me <path>" / "show me the file <path>"
+    FastPath(
+        re.compile(
+            r"^(?:please\s+)?(?:read|cat|display|type|show)"
+            r"(?:\s+(?:me\s+)?)?(?:the\s+)?(?:file\s+|contents?\s+of\s+)?"
+            r"['\"]?(?P<path>.+?)['\"]?\s*$",
+            re.IGNORECASE,
+        ),
+        "read_file",
+        _build_read_file_args,
+        _format_read_file,
+    ),
+    # "what's in <path>?"
+    FastPath(
+        re.compile(
+            r"^(?:please\s+)?what(?:'s| is)\s+in\s+['\"]?(?P<path>.+?)['\"]?[?.!]?\s*$",
+            re.IGNORECASE,
+        ),
+        "read_file",
+        _build_read_file_args,
+        _format_read_file,
+    ),
 ]
 
 
@@ -175,14 +343,34 @@ def check_ollama(config: dict) -> bool:
         return False
 
 
+def _parse_args(argv=None):
+    """Parse CLI flags; --run-command-mode is a session-only (non-persisted) override."""
+    parser = argparse.ArgumentParser(
+        prog="mini-agent",
+        description="Fully-local AI coding assistant backed by Ollama.",
+    )
+    parser.add_argument(
+        "--run-command-mode",
+        choices=["off", "confirm", "allowlist", "auto"],
+        default=None,
+        help="Override run_command_mode for this session only (does not persist to config).",
+    )
+    return parser.parse_args(argv)
+
+
 def main() -> None:
+    args = _parse_args()
     config = load_config()
+    if args.run_command_mode:
+        config["run_command_mode"] = args.run_command_mode
     init_skills(config)
     # Bind the interactive confirmation prompt for run_command. It stays inert
     # while run_command_mode is "off" (the default); the user opts in via config.
     run_command_skills.bind_confirmer(run_command_skills.terminal_confirmer)
 
     log_file = setup_logging(config)
+    if args.run_command_mode:
+        logger.info("run_command_mode overridden to %r for this session", args.run_command_mode)
     logger.info("mini-agent starting (log file: %s)", log_file)
 
     if not check_ollama(config):
@@ -194,7 +382,26 @@ def main() -> None:
         )
         sys.exit(1)
 
-    print("mini-agent ready. Type 'exit' to quit.\n")
+    # Pre-load the router model so the first turn doesn't incur the cold-start
+    # delay (~30-45s on CPU-only hardware). Shown so the user knows why startup
+    # can pause on first run.
+    print("Loading the router model into memory… (first run can take ~30-45s)", flush=True)
+    try:
+        warm_up(config)
+    except requests.RequestException as exc:
+        logger.warning("Router warm-up failed: %s", exc)
+        print(
+            "[warning] Could not pre-load the router model; "
+            "the first request may be slow or fail. See the log for details.",
+            file=sys.stderr,
+        )
+
+    print("\nmini-agent ready. Type 'exit' to quit.")
+    if config.get("run_command_mode", "off") != "off":
+        print(
+            f"[run_command] mode: {config['run_command_mode']} — "
+            "commands will prompt for confirmation before running.\n"
+        )
 
     history: list[dict] = []
     max_history = config.get("max_history_messages", 12)

@@ -24,6 +24,7 @@ DEFAULT_CONFIG = {
     "router_temperature": 0.2,
     "coder_temperature": 0.1,
     "max_history_messages": 12,   # keep the router's context small on limited hardware
+    "max_tool_rounds": 4,        # tool-calling rounds per turn before forcing a final answer
     "log_level": "INFO",          # DEBUG / INFO / WARNING / ERROR for mini-agent.log
     "log_file": "",               # empty = <app_dir>/logs/mini-agent.log
     # run_command safety policy (see skills/run_command_skills.py)

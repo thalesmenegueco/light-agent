@@ -33,10 +33,15 @@ ollama pull qwen2.5-coder:3b
 python main.py
 ```
 
+To enable the off-by-default `run_command` skill with per-command confirmation, start with `python main.py --run-command-mode confirm`.
+
+On startup, `main.py` pre-loads the router model into memory (with a visible progress message), so the first turn doesn't pay the ~30–45s cold-start load.
+
 Then try:
 
 - `list files in .`
 - `open README.md`
+- `read main.py` / `cat main.py` / `show me README.md`  (deterministic read)
 - `search for normalize_path in .`
 - `find files named config in .`
 - `replace "could not reach" with "cannot reach" in main.py`  (deterministic edit)
@@ -44,6 +49,8 @@ Then try:
 - `what can you do?`  (lists skills) / `what config are you using?`
 - `write a hello.py file that prints hello`  (router + coder model)
 - `why isn't this working?`  (delegates to the coder model)
+
+The list / open / read / search / find / git-status / git-log / git-diff / list-skills phrasings above are all **fast-path** matches: `main.py` recognizes them deterministically and calls the skill directly, skipping the router LLM entirely. Anything else falls through to the router.
 
 ## Current skills
 
@@ -77,6 +84,8 @@ Then try:
 5. **human confirmation** — anything else prompts with the exact command + cwd (fail-closed if no confirmer is bound); "always allow" persists the program to the allowlist.
 
 The model only ever sees `command` and `cwd`; shell, timeout, allowlist, denylist, network and cwd-confinement are config-side. Modes: `off` → `confirm` → `allowlist` → `auto`.
+
+**Enabling** (session-only, recommended): start with `python main.py --run-command-mode confirm`, then ask it to "run the command `python3 --version`". To persist, set `run_command_mode` in `config.json`, or tell the agent `set run_command_mode to confirm`. The confirmation → execution path is covered by live-terminal tests in `tests/test_run_command_cli.py` (real subprocess + real stdin, no Ollama).
 
 ## Phase 0 — Foundations (before any agent logic)
 
@@ -188,6 +197,6 @@ python main.py
 
 A few notes on what's in there:
 
-- **`try_fast_path` in `main.py`** now uses a small `_FAST_PATHS` table of `(regex, skill, arg_builder, formatter)` entries (Phase 4's optimization). It currently short-circuits "list files", "open", "search/grep for … in …", and "find files named … in …" straight to the deterministic skills, skipping the router LLM. Add a `FastPath` entry to extend it — anything that doesn't match (or whose skill errors) falls through to the full router.
-- **`router.py`**'s tool loop currently does one round of tool calls per turn (call tools → feed results back → final answer). If you later want the router to chain multiple tool calls in sequence (e.g. list files, then read one, then diagnose it, all without you re-prompting), that loop needs to become recursive.
+- **`try_fast_path` in `main.py`** now uses a small `_FAST_PATHS` table of `(regex, skill, arg_builder, formatter)` entries (Phase 4's optimization). It short-circuits "list files", "open", "search/grep for … in …", "find files named … in …", "read/cat/show me …", "git status / git log / git diff", and "what can you do / list skills" straight to the deterministic skills, skipping the router LLM. Add a `FastPath` entry to extend it — anything that doesn't match (or whose skill errors) falls through to the full router.
+- **`router.py`'s tool loop is recursive** (multi-round). Each turn sends the conversation + tools, executes any requested tool calls locally, feeds the results back, and asks again — so the router can chain e.g. `list files` → `read file` → `diagnose` without a fresh user prompt. A per-turn cap bounds the token cost on CPU-only hardware: `max_tool_rounds` in `config.json` (default 4) is the number of tool-calling rounds before the loop forces a final plain-text answer. Intermediate tool messages stay inside the turn and never enter the persisted history.
 - **Logging & error polish** — `logging_setup.py` routes diagnostics and errors to a rotating `logs/mini-agent.log` (1 MB, 3 backups). `log_file` and `log_level` in `config.json` override the location and verbosity. Stdout stays for user-facing output only; the router's tool dispatch, the CLI loop, and the OS opener all log unexpected errors instead of crashing or failing silently, and a corrupted `config.json` logs a warning while falling back to defaults.

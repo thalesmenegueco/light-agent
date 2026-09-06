@@ -17,6 +17,7 @@ from pathlib import Path
 # Make the project root importable regardless of how unittest is invoked.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import main
 from skills import DISPATCH
 
 
@@ -79,6 +80,49 @@ class TestGitSkills(unittest.TestCase):
         result = DISPATCH["git_log"](path=str(self.root))
         self.assertNotIn("error", result)
         self.assertIn("initial", result["log"])
+
+
+@unittest.skipUnless(_git_available(), "git not installed")
+class TestGitFastPath(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+        _make_repo(self.root)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_git_status_phrase(self):
+        result = main.try_fast_path(f"git status in {self.root}")
+        self.assertIsNotNone(result)
+        self.assertIn("Git status", result)
+
+    def test_whats_the_git_status_phrase(self):
+        result = main.try_fast_path(f"what's the git status in {self.root}?")
+        self.assertIsNotNone(result)
+        self.assertIn("Git status", result)
+
+    def test_git_log_phrase(self):
+        result = main.try_fast_path(f"git log in {self.root}")
+        self.assertIsNotNone(result)
+        self.assertIn("initial", result)
+
+    def test_latest_commits_phrase(self):
+        result = main.try_fast_path(f"show me the latest commits in {self.root}")
+        self.assertIsNotNone(result)
+        self.assertIn("initial", result)
+
+    def test_git_diff_phrase(self):
+        (self.root / "file.txt").write_text("hello\nworld\n", encoding="utf-8")
+        result = main.try_fast_path(f"git diff in {self.root}")
+        self.assertIsNotNone(result)
+        self.assertIn("world", result)
+
+    def test_not_a_repo_falls_through(self):
+        # A directory outside the repo (not nested in it) has no git ancestor.
+        with tempfile.TemporaryDirectory() as non_repo:
+            result = main.try_fast_path(f"git status in {non_repo}")
+        self.assertIsNone(result)
 
 
 if __name__ == "__main__":

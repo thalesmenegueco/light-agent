@@ -293,6 +293,44 @@ class TestFastPath(unittest.TestCase):
     def test_unrelated_text_returns_none(self):
         self.assertIsNone(main.try_fast_path("tell me a joke"))
 
+    def test_read_file_phrase(self):
+        result = main.try_fast_path(f"read {self.root / 'a.txt'}")
+        self.assertIsNotNone(result)
+        self.assertIn("hello", result)
+
+    def test_cat_file_phrase(self):
+        result = main.try_fast_path(f"cat {self.root / 'a.txt'}")
+        self.assertIsNotNone(result)
+        self.assertIn("hello", result)
+
+    def test_show_me_file_phrase(self):
+        result = main.try_fast_path(f"show me {self.root / 'a.txt'}")
+        self.assertIsNotNone(result)
+        self.assertIn("hello", result)
+
+    def test_show_me_the_file_phrase(self):
+        result = main.try_fast_path(f"show me the file {self.root / 'a.txt'}")
+        self.assertIsNotNone(result)
+        self.assertIn("hello", result)
+
+    def test_read_missing_falls_through(self):
+        result = main.try_fast_path(f"read {self.root / 'missing.txt'}")
+        self.assertIsNone(result)
+
+    def test_list_skills_phrase(self):
+        result = main.try_fast_path("what can you do?")
+        self.assertIsNotNone(result)
+        self.assertIn("list_files", result)
+        self.assertIn("run_command", result)
+
+    def test_bare_help_phrase(self):
+        result = main.try_fast_path("help")
+        self.assertIsNotNone(result)
+        self.assertIn("list_files", result)
+
+    def test_help_me_does_not_short_circuit(self):
+        self.assertIsNone(main.try_fast_path("help me fix this file"))
+
 
 class TestCoderGuard(unittest.TestCase):
     def test_run_coder_without_config(self):

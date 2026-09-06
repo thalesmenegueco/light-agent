@@ -13,7 +13,7 @@ from config import DEFAULT_CONFIG, save_config
 
 _CONFIG = None
 
-_INT_KEYS = {"max_history_messages", "run_command_timeout", "run_command_max_output"}
+_INT_KEYS = {"max_history_messages", "max_tool_rounds", "run_command_timeout", "run_command_max_output"}
 _NUM_KEYS = {"router_temperature", "coder_temperature"}
 _STR_KEYS = {"ollama_host", "router_model", "coder_model", "log_file", "run_command_cwd"}
 _LOG_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR"}
