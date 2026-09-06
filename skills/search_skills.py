@@ -84,6 +84,12 @@ def search_files(path: str, query: str, mode: str = "content", max_results: int 
                             truncated = True
                             break
 
+    # Sort deterministically: os.walk yields entries in raw filesystem order
+    # (unsorted, OS-dependent), so without this the results -- and anything the
+    # router treats as "the first one" -- would be arbitrary across machines.
+    files.sort()
+    matches.sort(key=lambda m: (m["file"], m["line"]))
+
     return {
         "path": str(p),
         "query": query,

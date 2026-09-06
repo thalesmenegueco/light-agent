@@ -259,6 +259,20 @@ class TestSearchSkills(unittest.TestCase):
         result = DISPATCH["search_files"](path=str(self.root), query="needle", mode="content")
         self.assertEqual(result["count"], 0)
 
+    def test_name_results_sorted(self):
+        (self.root / "zzz.txt").write_text("x\n", encoding="utf-8")
+        (self.root / "aaa.txt").write_text("x\n", encoding="utf-8")
+        (self.root / "mmm.txt").write_text("x\n", encoding="utf-8")
+        result = DISPATCH["search_files"](path=str(self.root), query=".txt", mode="name")
+        self.assertEqual(result["files"], sorted(result["files"]))
+
+    def test_content_matches_sorted_by_file_and_line(self):
+        (self.root / "b_file.txt").write_text("needle b1\nneedle b2\n", encoding="utf-8")
+        (self.root / "a_file.txt").write_text("needle a1\n", encoding="utf-8")
+        result = DISPATCH["search_files"](path=str(self.root), query="needle", mode="content")
+        key = lambda m: (m["file"], m["line"])  # noqa: E731
+        self.assertEqual(result["matches"], sorted(result["matches"], key=key))
+
 
 class TestFastPath(unittest.TestCase):
     def setUp(self):
