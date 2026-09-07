@@ -16,7 +16,7 @@ import requests
 from config import load_config
 from logging_setup import setup_logging
 from router import handle_message, warm_up
-from skills import DISPATCH, fs_skills, init_skills, run_command_skills
+from skills import DISPATCH, fs_skills, git_skills, init_skills, run_command_skills
 
 logger = logging.getLogger(__name__)
 
@@ -391,6 +391,8 @@ def main() -> None:
     run_command_skills.bind_confirmer(run_command_skills.terminal_confirmer)
     # Same for file mutations: inert unless file_mutation_mode is "confirm".
     fs_skills.bind_file_confirmer(fs_skills.terminal_file_confirmer)
+    # Same for git mutations: inert unless git_mutation_mode is "confirm".
+    git_skills.bind_git_confirmer(git_skills.terminal_git_confirmer)
 
     log_file = setup_logging(config)
     if args.run_command_mode:

@@ -31,6 +31,8 @@ DEFAULT_CONFIG = {
     "project_root": "",
     # file mutation policy (see skills/fs_skills.py): off | confirm | allow
     "file_mutation_mode": "allow",
+    # git mutation policy (see skills/git_skills.py): off | confirm | allow
+    "git_mutation_mode": "off",
     # run_command safety policy (see skills/run_command_skills.py)
     "run_command_mode": "off",           # off | confirm | allowlist | auto
     "run_command_allowlist": [],         # program names allowed without confirmation

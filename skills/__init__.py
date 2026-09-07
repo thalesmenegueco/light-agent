@@ -30,4 +30,5 @@ def init_skills(config: dict) -> None:
     meta_skills.bind_config(config)
     run_command_skills.bind_config(config)
     fs_skills.bind_config(config)
+    git_skills.bind_config(config)
     set_project_root(config.get("project_root", ""))

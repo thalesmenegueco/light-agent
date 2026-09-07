@@ -21,8 +21,11 @@ from skills import DISPATCH, TOOLS
 EXPECTED_TOOLS = {
     "append_file",
     "get_config",
+    "git_checkpoint",
+    "git_commit",
     "git_diff",
     "git_log",
+    "git_rollback",
     "git_status",
     "list_files",
     "list_skills",

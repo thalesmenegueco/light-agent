@@ -22,6 +22,7 @@ _BOOL_KEYS = {"run_command_shell", "run_command_allow_network"}
 _LIST_STR_KEYS = {"run_command_allowlist", "run_command_denylist"}
 _RUN_COMMAND_MODES = {"off", "confirm", "allowlist", "auto"}
 _FILE_MUTATION_MODES = {"off", "confirm", "allow"}
+_GIT_MUTATION_MODES = {"off", "confirm", "allow"}
 
 
 def bind_config(config: dict) -> None:
@@ -84,6 +85,8 @@ def set_config(updates: dict) -> dict:
         return {"error": f"run_command_mode must be one of {sorted(_RUN_COMMAND_MODES)}"}
     if "file_mutation_mode" in updates and updates["file_mutation_mode"] not in _FILE_MUTATION_MODES:
         return {"error": f"file_mutation_mode must be one of {sorted(_FILE_MUTATION_MODES)}"}
+    if "git_mutation_mode" in updates and updates["git_mutation_mode"] not in _GIT_MUTATION_MODES:
+        return {"error": f"git_mutation_mode must be one of {sorted(_GIT_MUTATION_MODES)}"}
 
     _CONFIG.update(updates)
     save_config(_CONFIG)
@@ -134,7 +137,8 @@ SCHEMAS = [
                     "router_temperature, coder_temperature, max_history_messages, "
                     "max_tool_rounds, log_level, log_file, project_root (the directory "
                     "the agent is allowed to read/write within), file_mutation_mode "
-                    "(off/confirm/allow), and run_command_* safety settings. Use this to "
+                    "(off/confirm/allow), git_mutation_mode (off/confirm/allow), and "
+                    "run_command_* safety settings. Use this to "
                     "change settings such as the project root."
                 ),
                 "parameters": {
