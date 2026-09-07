@@ -42,6 +42,10 @@ DEFAULT_CONFIG = {
     "run_command_cwd": "",               # "" = inherit; else fixed working directory
     "run_command_shell": False,          # allow shell operators at all
     "run_command_allow_network": False,  # allow network-touching programs
+    # verification loop (see skills/verify_skills.py). "" = verification disabled.
+    "test_command": "",                  # command run by run_tests (config-side only)
+    "test_timeout": 120,                 # seconds before a test run is killed
+    "test_max_output": 8000,             # chars, per stdout/stderr
 }
 
 

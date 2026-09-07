@@ -35,6 +35,7 @@ EXPECTED_TOOLS = {
     "replace_in_file",
     "run_coder",
     "run_command",
+    "run_tests",
     "search_files",
     "set_config",
     "write_file",

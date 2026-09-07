@@ -14,9 +14,9 @@ from platform_utils import set_project_root
 
 _CONFIG = None
 
-_INT_KEYS = {"max_history_messages", "max_tool_rounds", "run_command_timeout", "run_command_max_output"}
+_INT_KEYS = {"max_history_messages", "max_tool_rounds", "run_command_timeout", "run_command_max_output", "test_timeout", "test_max_output"}
 _NUM_KEYS = {"router_temperature", "coder_temperature"}
-_STR_KEYS = {"ollama_host", "router_model", "coder_model", "log_file", "run_command_cwd", "project_root"}
+_STR_KEYS = {"ollama_host", "router_model", "coder_model", "log_file", "run_command_cwd", "project_root", "test_command"}
 _LOG_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR"}
 _BOOL_KEYS = {"run_command_shell", "run_command_allow_network"}
 _LIST_STR_KEYS = {"run_command_allowlist", "run_command_denylist"}
