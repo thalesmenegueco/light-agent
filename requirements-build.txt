@@ -1,0 +1,3 @@
+# Build-time dependencies for packaging mini-agent with PyInstaller.
+# These are NOT runtime dependencies (see requirements.txt for those).
+pyinstaller>=6.0

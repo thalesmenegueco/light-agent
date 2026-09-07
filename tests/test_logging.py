@@ -12,11 +12,12 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 # Make the project root importable regardless of how unittest is invoked.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from config import DEFAULT_CONFIG
+from config import DEFAULT_CONFIG, get_base_dir
 from logging_setup import get_log_file, setup_logging
 
 
@@ -54,6 +55,14 @@ class TestLoggingSetup(unittest.TestCase):
         cfg = dict(DEFAULT_CONFIG)
         cfg["log_file"] = "~/mini-agent-test.log"
         self.assertEqual(get_log_file(cfg), Path.home() / "mini-agent-test.log")
+
+    def test_frozen_log_path_uses_base_dir(self):
+        cfg = dict(DEFAULT_CONFIG)
+        cfg["log_file"] = ""
+        with patch.object(sys, "frozen", True, create=True):
+            path = get_log_file(cfg)
+        self.assertEqual(path.name, "mini-agent.log")
+        self.assertEqual(path.parent, get_base_dir() / "logs")
 
     def test_setup_writes_to_log_file(self):
         tmp = tempfile.TemporaryDirectory()

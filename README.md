@@ -29,7 +29,9 @@ light-agent/
 ├── platform_utils.py    # OS dispatch (open_path) + path confinement (normalize_path/confined_path/set_project_root)
 ├── logging_setup.py     # rotating file logging → logs/mini-agent.log (1 MB × 3)
 ├── demo.py              # offline showcase (no Ollama)
-├── requirements.txt     # requests>=2.31,<3.0  (the only dep)
+├── requirements.txt     # requests>=2.31,<3.0  (the only runtime dep)
+├── requirements-build.txt # pyinstaller (build-time only)
+├── mini-agent.spec      # PyInstaller build config (one-file console app)
 ├── skills/
 │   ├── __init__.py      # registry: auto-discovers SCHEMAS → TOOLS[] + DISPATCH{}; init_skills(config)
 │   ├── fs_skills.py     # list/read/write/append/move/replace_in_file/open_file (+ file-mutation gate)
@@ -39,7 +41,7 @@ light-agent/
 │   ├── meta_skills.py   # list_skills/get_config/set_config (validates + persists)
 │   ├── run_command_skills.py  # run_command (deny-by-default safety policy)
 │   └── verify_skills.py # run_tests (runs the config-side test_command; verification loop)
-├── tests/               # 172 tests (offline, no Ollama)
+├── tests/               # 184 tests (offline, no Ollama)
 │   ├── test_skills.py             # registry + fs/search + fast path
 │   ├── test_git_skills.py         # read-only git (+ git fast paths)
 │   ├── test_git_mutation_policy.py # git commit/checkpoint/rollback gate
@@ -52,7 +54,8 @@ light-agent/
 │   ├── test_file_mutation_policy.py  # file mutation gate
 │   ├── test_verify_skills.py      # run_tests verification skill
 │   ├── test_session.py            # session-state persistence
-│   └── test_autopilot.py          # budget + planner parsing + resume loop
+│   ├── test_autopilot.py          # budget + planner parsing + resume loop
+│   └── test_run_command_path_confinement.py  # argv-level run_command confinement
 ├── logs/                # mini-agent.log (.gitkeep, gitignored)
 ├── assets/              # (empty, reserved for packaging assets)
 ├── .gitignore
@@ -124,7 +127,7 @@ In autopilot mode **no terminal confirmers are bound**, so every `confirm`-gated
 
 ### Testing
 ```bash
-python3 -m unittest   # 172 tests pass, offline, no Ollama (~4 s)
+python3 -m unittest   # 184 tests pass, offline, no Ollama (~4 s)
 python3 demo.py       # offline showcase, reports 20 tools
 ```
 `tests/test_run_command_cli.py` drives the real `terminal_confirmer` through a real subprocess with real stdin (the only test that touches a live terminal). Everything else uses scripted/mocked confirmers and `requests`.
@@ -136,7 +139,7 @@ python3 demo.py       # offline showcase, reports 20 tools
 - The session token budget counts the **router** model only (eval + prompt-eval per call); the coder leaf's tokens aren't tallied yet.
 - Resume is "at-least-once": a step marked `in_progress` when a crash lands may re-run on resume.
 - Natural next skills: `copy_file`, `delete_file`/`move_to_trash`, `file_info`, `tree`, `count_lines`, `diff_files`, `fetch_url` (network, opt-in). Mutating/network ones must land behind the same gating as the existing policies.
-- Phase 5 = PyInstaller packaging + cross-platform testing (`sys.frozen`/`sys.executable`).
+- Phase 5 packaging config (`mini-agent.spec`, `requirements-build.txt`, frozen log path) is in place; the actual PyInstaller build still needs to be run and smoke-tested on Mint first, then Windows (see [Phase 5](#phase-5--packaging--cross-platform-testing)).
 
 ## Try it now
 
@@ -358,9 +361,23 @@ Once the basic loop works, add a cheap pre-filter in `main.py` before even calli
 
 ## Phase 5 — Packaging & cross-platform testing
 
-- Test on Mint first (simpler paths), then Windows.
-- PyInstaller build with your known `sys.frozen`/`sys.executable` fix for locating the skills folder relative to the `.exe`.
-- Ollama stays an external dependency — check at startup that `localhost:11434` responds, and show a clear error/instructions if not (rather than a silent hang), given both target machines are resource-limited and you don't want it silently trying to auto-launch something heavy.
+Build-time only (PyInstaller is not a runtime dependency). The build environment needs the runtime deps (`requests`) **and** PyInstaller:
+
+```bash
+python -m venv .venv
+.venv/bin/pip install -r requirements.txt -r requirements-build.txt
+.venv/bin/pyinstaller --clean --noconfirm mini-agent.spec
+```
+
+Output is a single-file console binary at `dist/mini-agent` (Linux/macOS) or `dist/mini-agent.exe` (Windows).
+
+Notes on the frozen app:
+
+- **No on-disk skills folder.** Skills are imported as Python modules (`skills/__init__.py`), so PyInstaller bundles them into the binary automatically — the original "locate the skills folder relative to the .exe" fix is moot. `mini-agent.spec` therefore collects no data files.
+- **Writable locations.** Config lives at `%APPDATA%\MiniAgent\` / `~/.config/mini-agent/` (`config.get_base_dir`), which is already per-user. When frozen, logs go to `<base_dir>/logs/mini-agent.log` (`logging_setup.get_log_file`) instead of next to the exe, which may be read-only (e.g. Program Files).
+- **Ollama stays external.** `main.py` already checks `localhost:11434` at startup and exits with a clear message instead of hanging (see `check_ollama`).
+
+Test on Mint first (simpler paths), then Windows — both still use Ollama as the external model server.
 
 ## Where to use Kilo Code / OpenRouter / DeepSeek's harness
 
