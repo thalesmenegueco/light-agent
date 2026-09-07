@@ -56,6 +56,25 @@ class TestRegistry(unittest.TestCase):
             self.assertIn("description", schema["function"])
             self.assertIn("parameters", schema["function"])
 
+    def test_exclude_skills_removes_only_requested(self):
+        from skills import exclude_skills
+        saved_tools = list(TOOLS)
+        saved_dispatch = dict(DISPATCH)
+        try:
+            exclude_skills({"open_file"})
+            names = [schema["function"]["name"] for schema in TOOLS]
+            self.assertNotIn("open_file", names)
+            self.assertNotIn("open_file", DISPATCH)
+            self.assertIn("list_files", DISPATCH)
+            self.assertEqual(len(TOOLS), len(saved_tools) - 1)
+            # Excluding an already-absent name is a no-op.
+            exclude_skills({"open_file"})
+            self.assertEqual(len(TOOLS), len(saved_tools) - 1)
+        finally:
+            TOOLS[:] = saved_tools
+            DISPATCH.clear()
+            DISPATCH.update(saved_dispatch)
+
 
 class TestFsSkills(unittest.TestCase):
     def setUp(self):

@@ -16,7 +16,7 @@ import requests
 from config import load_config
 from logging_setup import setup_logging
 from router import handle_message, warm_up
-from skills import DISPATCH, fs_skills, git_skills, init_skills, run_command_skills
+from skills import DISPATCH, exclude_skills, fs_skills, git_skills, init_skills, run_command_skills
 
 logger = logging.getLogger(__name__)
 
@@ -398,6 +398,12 @@ def _run_autopilot(config: dict, goal: str, new_session: bool) -> None:
 
     if new_session:
         clear_session()
+
+    # open_file launches the OS default GUI app (xdg-open / os.startfile):
+    # pointless and unwanted in an unattended run, so drop it from the tools
+    # the router is offered. Read-only and mutation skills are unaffected.
+    exclude_skills({"open_file"})
+
     state = autopilot.run_autopilot(config, goal, on_progress=print)
     print()
     print("--- autopilot summary ---")

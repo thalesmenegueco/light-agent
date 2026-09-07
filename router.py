@@ -28,9 +28,10 @@ SYSTEM_PROMPT = (
 _WARMUP_TIMEOUT = 300  # generous: cold model load on CPU can exceed the 120s per-turn cap
 _DEFAULT_MAX_TOOL_ROUNDS = 4  # tool-calling rounds before forcing a final answer
 
-# Session-wide token accounting, used by the autopilot's budget. `_call_ollama`
-# and `plan_goal` accumulate `eval_count` + `prompt_eval_count` here; the
-# autopilot resets/reads it between steps so a token cap can bound a whole run.
+# Session-wide token accounting, used by the autopilot's budget. `_call_ollama`,
+# `plan_goal`, and the coder leaf (via coder.ask_coder) accumulate
+# `eval_count` + `prompt_eval_count` here; the autopilot resets/reads it between
+# steps so a token cap bounds the WHOLE run (router + coder, not just router).
 _SESSION_TOKENS = 0
 
 
@@ -43,7 +44,7 @@ def get_token_count() -> int:
     return _SESSION_TOKENS
 
 
-def _accumulate_tokens(data: dict) -> None:
+def accumulate_tokens(data: dict) -> None:
     global _SESSION_TOKENS
     _SESSION_TOKENS += int(data.get("eval_count", 0) or 0) + int(data.get("prompt_eval_count", 0) or 0)
 
@@ -86,7 +87,7 @@ def _call_ollama(config: dict, messages: list[dict], use_tools: bool = True) -> 
     )
     resp.raise_for_status()
     data = resp.json()
-    _accumulate_tokens(data)
+    accumulate_tokens(data)
     return data
 
 
@@ -227,6 +228,6 @@ def plan_goal(config: dict, goal: str) -> list[str]:
     )
     resp.raise_for_status()
     data = resp.json()
-    _accumulate_tokens(data)
+    accumulate_tokens(data)
     steps = _parse_plan(data.get("message", {}).get("content", ""))
     return steps or [goal.strip()]

@@ -123,7 +123,7 @@ Config lives at `%APPDATA%\MiniAgent\config.json` (Windows) / `~/.config/mini-ag
 4. **budget** — before every step, `max_session_steps` / `session_timeout_seconds` / `max_session_tokens` are checked; hitting any of them stops the run and marks it `blocked`.
 5. **persist/resume** — progress (goal, plan, step status, budget counters, compact history) is written to `session.json` in the config dir (`~/.config/mini-agent/` / `%APPDATA%\MiniAgent\`) after every step, so a crashed run resumes from the last completed step. Re-run the same `--autopilot "<goal>"` to resume; `--new-session` discards saved state and starts fresh.
 
-In autopilot mode **no terminal confirmers are bound**, so every `confirm`-gated path fails closed rather than hanging on an absent human. For unattended use, configure `project_root` (boundary), `file_mutation_mode`/`git_mutation_mode` (`off` or `allow` per your trust), and `test_command` + the budget keys.
+In autopilot mode **no terminal confirmers are bound**, so every `confirm`-gated path fails closed rather than hanging on an absent human, and `open_file` is excluded from the offered tools (it would launch the OS GUI app, which is pointless unattended). For unattended use, configure `project_root` (boundary), `file_mutation_mode`/`git_mutation_mode` (`off` or `allow` per your trust), and `test_command` + the budget keys.
 
 ### Testing
 ```bash
@@ -136,7 +136,7 @@ python3 demo.py       # offline showcase, reports 20 tools
 - Fast path is a fixed phrase table (extend via a `FastPath` entry); the tool loop is recursive but capped at `max_tool_rounds`.
 - `run_command` "always allow" persists to the allowlist but only auto-runs in `allowlist`/`auto` modes.
 - `run_command` argv-level confinement is heuristic: it flags argument paths that escape `project_root` (absolute, `..`, `~`, symlinks) but skips option flags and plain words; a non-path argument that happens to look like an absolute path (e.g. a `grep` pattern) is refused on the safe side. The program token itself (`argv[0]`) is not confined — running an outside program binary is still governed by the deny/allowlist/confirm model.
-- The session token budget counts the **router** model only (eval + prompt-eval per call); the coder leaf's tokens aren't tallied yet.
+- The session token budget counts the **router** model and the **coder leaf** (both accumulate `eval_count` + `prompt_eval_count` into the same counter), so `max_session_tokens` bounds the whole run.
 - Resume is "at-least-once": a step marked `in_progress` when a crash lands may re-run on resume.
 - Natural next skills: `copy_file`, `delete_file`/`move_to_trash`, `file_info`, `tree`, `count_lines`, `diff_files`, `fetch_url` (network, opt-in). Mutating/network ones must land behind the same gating as the existing policies.
 - Phase 5 packaging config (`mini-agent.spec`, `requirements-build.txt`, frozen log path) is in place; the actual PyInstaller build still needs to be run and smoke-tested on Mint first, then Windows (see [Phase 5](#phase-5--packaging--cross-platform-testing)).

@@ -32,4 +32,9 @@ def ask_coder(config: dict, instruction: str, file_content: str | None = None) -
     )
     resp.raise_for_status()
     data = resp.json()
+    # Accumulate the coder's tokens into the session budget so an autopilot's
+    # token cap bounds the WHOLE run, not just the router. Lazy import to avoid
+    # a circular import (router -> skills -> code_skills -> coder).
+    from router import accumulate_tokens
+    accumulate_tokens(data)
     return data.get("message", {}).get("content", "").strip()

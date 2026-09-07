@@ -33,3 +33,17 @@ def init_skills(config: dict) -> None:
     git_skills.bind_config(config)
     verify_skills.bind_config(config)
     set_project_root(config.get("project_root", ""))
+
+
+def exclude_skills(names) -> None:
+    """Remove skills by function name from TOOLS and DISPATCH, in place.
+
+    Unattended (autopilot) runs shouldn't be offered skills that are pointless
+    or unwanted without a human -- e.g. open_file, which launches the OS GUI
+    app. Mutates the module-level containers in place so modules that imported
+    TOOLS/DISPATCH by reference (router.py, main.py) see the change too.
+    """
+    excluded = set(names)
+    TOOLS[:] = [schema for schema in TOOLS if schema["function"]["name"] not in excluded]
+    for name in excluded:
+        DISPATCH.pop(name, None)
