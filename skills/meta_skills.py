@@ -10,12 +10,13 @@ runtime without hand-editing config.json.
 """
 
 from config import DEFAULT_CONFIG, save_config
+from platform_utils import set_project_root
 
 _CONFIG = None
 
 _INT_KEYS = {"max_history_messages", "max_tool_rounds", "run_command_timeout", "run_command_max_output"}
 _NUM_KEYS = {"router_temperature", "coder_temperature"}
-_STR_KEYS = {"ollama_host", "router_model", "coder_model", "log_file", "run_command_cwd"}
+_STR_KEYS = {"ollama_host", "router_model", "coder_model", "log_file", "run_command_cwd", "project_root"}
 _LOG_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR"}
 _BOOL_KEYS = {"run_command_shell", "run_command_allow_network"}
 _LIST_STR_KEYS = {"run_command_allowlist", "run_command_denylist"}
@@ -83,6 +84,10 @@ def set_config(updates: dict) -> dict:
 
     _CONFIG.update(updates)
     save_config(_CONFIG)
+    if "project_root" in updates:
+        # The confinement root is cached at startup; re-apply it immediately
+        # so the change takes effect without a restart.
+        set_project_root(updates["project_root"])
     return {"config": dict(_CONFIG)}
 
 
@@ -124,14 +129,19 @@ SCHEMAS = [
                     "Update one or more configuration values and persist them to disk. "
                     "Known keys: ollama_host, router_model, coder_model, "
                     "router_temperature, coder_temperature, max_history_messages, "
-                    "log_level, log_file, and run_command_* safety settings."
+                    "max_tool_rounds, log_level, log_file, project_root (the directory "
+                    "the agent is allowed to read/write within), and run_command_* "
+                    "safety settings. Use this to change settings such as the project root."
                 ),
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "updates": {
                             "type": "object",
-                            "description": "Map of config key to its new value (only known keys are allowed).",
+                            "description": (
+                                "Map of config key to its new value (only known keys are "
+                                "allowed). Example: {\"project_root\": \"/path/to/project\"}."
+                            ),
                         },
                     },
                     "required": ["updates"],

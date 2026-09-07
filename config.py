@@ -27,6 +27,8 @@ DEFAULT_CONFIG = {
     "max_tool_rounds": 4,        # tool-calling rounds per turn before forcing a final answer
     "log_level": "INFO",          # DEBUG / INFO / WARNING / ERROR for mini-agent.log
     "log_file": "",               # empty = <app_dir>/logs/mini-agent.log
+    # path confinement (see platform_utils.normalize_path). "" = no confinement.
+    "project_root": "",
     # run_command safety policy (see skills/run_command_skills.py)
     "run_command_mode": "off",           # off | confirm | allowlist | auto
     "run_command_allowlist": [],         # program names allowed without confirmation

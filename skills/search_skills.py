@@ -11,7 +11,7 @@ Name matching is case-insensitive; content matching is case-sensitive
 import os
 from pathlib import Path
 
-from platform_utils import normalize_path
+from platform_utils import confined_path
 
 # Directories skipped during the walk, so searching the project root doesn't
 # drown in venv / cache / VCS noise.
@@ -29,7 +29,9 @@ def search_files(path: str, query: str, mode: str = "content", max_results: int 
     mode: 'name' (filenames contain query), 'content' (lines contain query),
           or 'both'. Name matching is case-insensitive; content is case-sensitive.
     """
-    p = normalize_path(path)
+    p, err = confined_path(path)
+    if err:
+        return err
     if not p.exists():
         return {"error": f"Path not found: {p}"}
     if not p.is_dir():

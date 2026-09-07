@@ -87,6 +87,16 @@ The model only ever sees `command` and `cwd`; shell, timeout, allowlist, denylis
 
 **Enabling** (session-only, recommended): start with `python main.py --run-command-mode confirm`, then ask it to "run the command `python3 --version`". To persist, set `run_command_mode` in `config.json`, or tell the agent `set run_command_mode to confirm`. The confirmation → execution path is covered by live-terminal tests in `tests/test_run_command_cli.py` (real subprocess + real stdin, no Ollama).
 
+### Path confinement
+
+By default the agent can read/write any path (`project_root` is empty). Set `project_root` to a directory, and every filesystem, git, and search skill resolves paths against it — and refuses anything that escapes it via `..`, an absolute path, or a symlink (the `run_command` working directory is confined the same way). This is the first safety layer for unattended/autopilot use: confine the agent to the project it's allowed to touch.
+
+```json
+{ "project_root": "/home/you/your-project" }
+```
+
+An empty `project_root` (the default) disables confinement and paths behave exactly as before. Set it in `config.json`, or tell the agent `set project_root to /home/you/your-project`.
+
 ## Phase 0 — Foundations (before any agent logic)
 
 - Install Ollama on both machines, pull `qwen3:4b-instruct` (router) and `qwen2.5-coder:3b` (coder).

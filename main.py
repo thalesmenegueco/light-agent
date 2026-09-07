@@ -182,6 +182,17 @@ def _format_read_file(result: dict) -> str | None:
     return f"{header}\n{content}{suffix}"
 
 
+def _build_set_project_root_args(match) -> dict:
+    return {"updates": {"project_root": match.group("value").strip()}}
+
+
+def _format_set_project_root(result: dict) -> str | None:
+    if "error" in result:
+        return None
+    root = result.get("config", {}).get("project_root", "")
+    return f"project_root set to {root!r}."
+
+
 _FAST_PATHS: list[FastPath] = [
     # "list files in <path>"
     FastPath(
@@ -227,6 +238,17 @@ _FAST_PATHS: list[FastPath] = [
         "search_files",
         _build_search_name_args,
         _format_search,
+    ),
+    # "set project root to <path>" / "set the project root = <path>"
+    FastPath(
+        re.compile(
+            r"^(?:please\s+)?set\s+(?:the\s+)?project\s+root\s+(?:to|=)\s+"
+            r"['\"]?(?P<value>.+?)['\"]?\s*$",
+            re.IGNORECASE,
+        ),
+        "set_config",
+        _build_set_project_root_args,
+        _format_set_project_root,
     ),
     # "git status" / "what's the git status?" / "what changed?" (optional "in <path>")
     FastPath(

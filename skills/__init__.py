@@ -11,6 +11,7 @@ never needs to change.
 """
 
 from . import code_skills, fs_skills, git_skills, meta_skills, run_command_skills, search_skills
+from platform_utils import set_project_root
 
 _SKILL_MODULES = [fs_skills, search_skills, git_skills, code_skills, meta_skills, run_command_skills]
 
@@ -28,3 +29,4 @@ def init_skills(config: dict) -> None:
     code_skills.bind_config(config)
     meta_skills.bind_config(config)
     run_command_skills.bind_config(config)
+    set_project_root(config.get("project_root", ""))

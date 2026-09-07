@@ -19,6 +19,8 @@ from config import DEFAULT_CONFIG
 from skills import DISPATCH, TOOLS
 from skills import meta_skills as meta
 
+import main
+
 
 class TestListSkills(unittest.TestCase):
     def test_lists_every_registered_tool(self):
@@ -73,6 +75,31 @@ class TestConfigSkills(unittest.TestCase):
         result = DISPATCH["set_config"](updates={"log_level": "VERBOSE"})
         self.assertIn("error", result)
         mock_save.assert_not_called()
+
+    @patch.object(meta, "save_config")
+    @patch.object(meta, "set_project_root")
+    def test_set_config_project_root_reapplies_root(self, mock_set_root, mock_save):
+        result = DISPATCH["set_config"](updates={"project_root": "/tmp/x"})
+        self.assertEqual(result["config"]["project_root"], "/tmp/x")
+        mock_save.assert_called_once()
+        mock_set_root.assert_called_once_with("/tmp/x")
+
+    @patch.object(meta, "save_config")
+    @patch.object(meta, "set_project_root")
+    def test_fast_path_set_project_root(self, mock_set_root, mock_save):
+        result = main.try_fast_path("set project root to /tmp/x")
+        self.assertIsNotNone(result)
+        self.assertIn("/tmp/x", result)
+        mock_save.assert_called_once()
+        mock_set_root.assert_called_once_with("/tmp/x")
+
+    @patch.object(meta, "save_config")
+    @patch.object(meta, "set_project_root")
+    def test_fast_path_set_project_root_rejects_unknown_key(self, mock_set_root, mock_save):
+        # A non-project-root config phrase must NOT short-circuit (falls through).
+        self.assertIsNone(main.try_fast_path("set the temperature to 0.5"))
+        mock_save.assert_not_called()
+        mock_set_root.assert_not_called()
 
 
 if __name__ == "__main__":

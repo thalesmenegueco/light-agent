@@ -13,7 +13,7 @@ import logging
 import subprocess
 from pathlib import Path
 
-from platform_utils import normalize_path
+from platform_utils import confined_path
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +58,9 @@ def _truncate(text: str, max_chars: int) -> tuple[str, bool]:
 
 def git_status(path: str = ".") -> dict:
     """Working-tree status: current branch plus short status lines."""
-    repo = normalize_path(path)
+    repo, err = confined_path(path)
+    if err:
+        return err
     result = _run_git(repo, "status", "--short", "--branch")
     if not result["ok"]:
         return {"error": result["error"]}
@@ -67,7 +69,9 @@ def git_status(path: str = ".") -> dict:
 
 def git_diff(path: str = ".", staged: bool = False) -> dict:
     """Unified diff of working-tree changes (or staged changes)."""
-    repo = normalize_path(path)
+    repo, err = confined_path(path)
+    if err:
+        return err
     args = ["diff", "--staged"] if staged else ["diff"]
     result = _run_git(repo, *args)
     if not result["ok"]:
@@ -78,7 +82,9 @@ def git_diff(path: str = ".", staged: bool = False) -> dict:
 
 def git_log(path: str = ".", max_count: int = 20) -> dict:
     """Recent commit history, one line per commit (hash + subject)."""
-    repo = normalize_path(path)
+    repo, err = confined_path(path)
+    if err:
+        return err
     try:
         max_count = int(max_count)
     except (TypeError, ValueError):

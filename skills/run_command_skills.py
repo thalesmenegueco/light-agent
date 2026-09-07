@@ -39,7 +39,7 @@ import subprocess
 from pathlib import Path
 
 from config import save_config
-from platform_utils import split_command
+from platform_utils import confined_path, split_command
 
 logger = logging.getLogger(__name__)
 
@@ -204,10 +204,12 @@ def _resolve_cwd(config: dict, cwd_arg: str):
     raw = (cwd_arg or "").strip() or (config.get("run_command_cwd") or "").strip()
     if not raw:
         return None
-    p = Path(raw).expanduser()
+    p, err = confined_path(raw)
+    if err:
+        return {"error": err["error"], "reason": "cwd_outside_root"}
     if not p.is_dir():
         return {"error": f"Working directory not found: {raw}", "reason": "cwd"}
-    return str(p.resolve())
+    return str(p)
 
 
 def _add_to_allowlist(config: dict, program: str) -> None:

@@ -9,12 +9,14 @@ skills/__init__.py auto-discovers this convention.
 
 from pathlib import Path
 
-from platform_utils import normalize_path, open_path
+from platform_utils import confined_path, open_path
 
 
 def list_files(path: str) -> dict:
     """List file and folder names inside a given directory."""
-    p = normalize_path(path)
+    p, err = confined_path(path)
+    if err:
+        return err
     if not p.exists():
         return {"error": f"Path not found: {p}"}
     if not p.is_dir():
@@ -27,7 +29,9 @@ def list_files(path: str) -> dict:
 
 def read_file(path: str, max_chars: int = 8000) -> dict:
     """Read a text file's content (truncated for context safety)."""
-    p = normalize_path(path)
+    p, err = confined_path(path)
+    if err:
+        return err
     if not p.exists():
         return {"error": f"File not found: {p}"}
     if not p.is_file():
@@ -48,8 +52,12 @@ def read_file(path: str, max_chars: int = 8000) -> dict:
 
 def move_file(source: str, destination: str) -> dict:
     """Move or rename a file."""
-    src = normalize_path(source)
-    dst = normalize_path(destination)
+    src, err = confined_path(source)
+    if err:
+        return err
+    dst, err = confined_path(destination)
+    if err:
+        return err
     if not src.exists():
         return {"error": f"Source not found: {src}"}
 
@@ -64,7 +72,9 @@ def move_file(source: str, destination: str) -> dict:
 
 def write_file(path: str, content: str, overwrite: bool = False) -> dict:
     """Create a text file with the given content (refuses to clobber by default)."""
-    p = normalize_path(path)
+    p, err = confined_path(path)
+    if err:
+        return err
     if p.exists() and not overwrite:
         return {"error": f"File already exists: {p} (set overwrite=true to replace it)"}
 
@@ -79,7 +89,9 @@ def write_file(path: str, content: str, overwrite: bool = False) -> dict:
 
 def append_file(path: str, content: str) -> dict:
     """Append text to the end of a file, creating it if needed."""
-    p = normalize_path(path)
+    p, err = confined_path(path)
+    if err:
+        return err
     try:
         p.parent.mkdir(parents=True, exist_ok=True)
         with p.open("a", encoding="utf-8") as fh:
@@ -96,7 +108,9 @@ def replace_in_file(path: str, old: str, new: str, replace_all: bool = False) ->
     Refuses ambiguous edits: if `old` appears more than once and `replace_all`
     is false, returns an error so the caller can provide a more specific match.
     """
-    p = normalize_path(path)
+    p, err = confined_path(path)
+    if err:
+        return err
     if not p.exists():
         return {"error": f"File not found: {p}"}
     if not p.is_file():
@@ -133,7 +147,9 @@ def replace_in_file(path: str, old: str, new: str, replace_all: bool = False) ->
 
 def open_file(path: str) -> dict:
     """Open a file or folder with the OS default application."""
-    p = normalize_path(path)
+    p, err = confined_path(path)
+    if err:
+        return err
     if not p.exists():
         return {"error": f"Path not found: {p}"}
 
