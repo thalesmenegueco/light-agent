@@ -51,8 +51,21 @@ class TestAskCoder(unittest.TestCase):
         self.assertEqual(result, "print('hi')")
         payload = mock_post.call_args.kwargs["json"]
         self.assertEqual(payload["model"], "qwen2.5-coder:3b")
-        self.assertIn("write hello", payload["messages"][0]["content"])
-        self.assertIn("x = 1", payload["messages"][0]["content"])
+        self.assertEqual(payload["messages"][0]["role"], "system")
+        self.assertEqual(payload["messages"][1]["role"], "user")
+        self.assertIn("write hello", payload["messages"][1]["content"])
+        self.assertIn("x = 1", payload["messages"][1]["content"])
+
+    @patch("coder.requests.post")
+    def test_includes_coding_output_contract(self, mock_post):
+        mock_post.return_value.raise_for_status.return_value = None
+        mock_post.return_value.json.return_value = _chat_response()
+
+        coder.ask_coder(self._config(), "write hello")
+
+        system = mock_post.call_args.kwargs["json"]["messages"][0]["content"]
+        self.assertIn("output ONLY the code", system)
+        self.assertIn("markdown fences", system)
 
     @patch("coder.requests.post")
     def test_accumulates_tokens_into_session_budget(self, mock_post):

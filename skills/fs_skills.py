@@ -7,6 +7,7 @@ Each skill module exposes a SCHEMAS list of (schema_dict, function) pairs.
 skills/__init__.py auto-discovers this convention.
 """
 
+import re
 from pathlib import Path
 
 from platform_utils import confined_path, open_path
@@ -101,8 +102,27 @@ def list_files(path: str) -> dict:
     return {"path": str(p), "files": files, "folders": folders}
 
 
-def read_file(path: str, max_chars: int = 8000) -> dict:
-    """Read a text file's content (truncated for context safety)."""
+def _coerce_int(value, default: int) -> int:
+    """Coerce a possibly-string arg to an int, falling back to `default`."""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def read_file(
+    path: str,
+    max_chars: int = 8000,
+    start_line: int = 1,
+    max_lines: int = 0,
+    line_numbers: bool = False,
+) -> dict:
+    """Read a text file's content, optionally a line window, with line numbers.
+
+    start_line: 1-based first line to return (clamped to >= 1).
+    max_lines:  maximum lines to return; 0 means "to end of file".
+    line_numbers: prefix each returned line with its true 1-based number.
+    """
     p, err = confined_path(path)
     if err:
         return err
@@ -116,10 +136,49 @@ def read_file(path: str, max_chars: int = 8000) -> dict:
     except OSError as exc:
         return {"error": f"Could not read file: {exc}"}
 
-    truncated = len(content) > max_chars
+    max_chars = _coerce_int(max_chars, 8000)
+    if max_chars <= 0:
+        max_chars = 8000
+    start_line = _coerce_int(start_line, 1)
+    if start_line < 1:
+        start_line = 1
+    max_lines = _coerce_int(max_lines, 0)
+    if max_lines < 0:
+        max_lines = 0
+
+    # keepends=True preserves the exact bytes (incl. a trailing newline) so the
+    # default path still returns the raw content unchanged.
+    lines = content.splitlines(keepends=True)
+    total_lines = len(lines)
+    start_idx = start_line - 1
+
+    if start_idx >= total_lines:
+        return {
+            "path": str(p),
+            "content": "",
+            "start_line": start_line,
+            "end_line": start_line - 1,
+            "total_lines": total_lines,
+            "truncated": False,
+        }
+
+    end_idx = total_lines if max_lines == 0 else min(total_lines, start_idx + max_lines)
+    window = lines[start_idx:end_idx]
+
+    if line_numbers:
+        text = "".join(
+            f"{start_line + offset:>4}: {line}" for offset, line in enumerate(window)
+        )
+    else:
+        text = "".join(window)
+
+    truncated = (end_idx < total_lines) or (len(text) > max_chars)
     return {
         "path": str(p),
-        "content": content[:max_chars],
+        "content": text[:max_chars],
+        "start_line": start_line,
+        "end_line": start_line + len(window) - 1,
+        "total_lines": total_lines,
         "truncated": truncated,
     }
 
@@ -185,6 +244,51 @@ def append_file(path: str, content: str) -> dict:
         return {"error": f"Append failed: {exc}"}
 
     return {"appended_to": str(p)}
+
+
+_FENCE_RE = re.compile(r"^```[^\n]*\n(.*?)^```\s*$", re.MULTILINE | re.DOTALL)
+
+
+def extract_code_block(text: str) -> str:
+    """Return the code inside the first fenced block, else the text as-is.
+
+    The coder leaf can still emit markdown fences despite its output contract,
+    so `write_code` runs its content through here first: fences (and any
+    surrounding blank lines) are stripped, leaving the raw code to write.
+    """
+    if not text:
+        return ""
+    match = _FENCE_RE.search(text)
+    if match:
+        return match.group(1).strip()
+    return text.strip()
+
+
+def write_code(path: str, content: str, overwrite: bool = False) -> dict:
+    """Write generated code to a file, stripping markdown fences first.
+
+    This is the deterministic "apply the coder's output" step: the router asks
+    `run_coder` for code, then hands the returned text here. It is gated by the
+    same `file_mutation_mode` policy as `write_file`.
+    """
+    p, err = confined_path(path)
+    if err:
+        return err
+    if p.exists() and not overwrite:
+        return {"error": f"File already exists: {p} (set overwrite=true to replace it)"}
+
+    cleaned = extract_code_block(content)
+    refused = _check_mutation("write_code", str(p), f"content: {cleaned[:80]!r}")
+    if refused:
+        return refused
+
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(cleaned, encoding="utf-8")
+    except OSError as exc:
+        return {"error": f"Write failed: {exc}"}
+
+    return {"written_to": str(p), "bytes": len(cleaned)}
 
 
 def replace_in_file(path: str, old: str, new: str, replace_all: bool = False) -> dict:
@@ -268,17 +372,63 @@ SCHEMAS = [
             "type": "function",
             "function": {
                 "name": "read_file",
-                "description": "Read the text content of a file.",
+                "description": (
+                    "Read a text file's content, optionally a line window. "
+                    "start_line is the 1-based first line; max_lines caps the "
+                    "number of lines (0 = to end); line_numbers prefixes each "
+                    "line with its number."
+                ),
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "path": {"type": "string", "description": "File path to read."}
+                        "path": {"type": "string", "description": "File path to read."},
+                        "start_line": {
+                            "type": "integer",
+                            "description": "1-based first line to return. Defaults to 1.",
+                        },
+                        "max_lines": {
+                            "type": "integer",
+                            "description": "Maximum lines to return. 0 = to end of file.",
+                        },
+                        "line_numbers": {
+                            "type": "boolean",
+                            "description": "Prefix each line with its true 1-based number.",
+                        },
                     },
                     "required": ["path"],
                 },
             },
         },
         read_file,
+    ),
+    (
+        {
+            "type": "function",
+            "function": {
+                "name": "write_code",
+                "description": (
+                    "Write generated code to a file, stripping any markdown "
+                    "fences. Use this after run_coder produces code, to apply "
+                    "it to disk. Gated by file_mutation_mode."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "File path to write."},
+                        "content": {
+                            "type": "string",
+                            "description": "The code to write (markdown fences are stripped).",
+                        },
+                        "overwrite": {
+                            "type": "boolean",
+                            "description": "Whether to replace an existing file. Defaults to false.",
+                        },
+                    },
+                    "required": ["path", "content"],
+                },
+            },
+        },
+        write_code,
     ),
     (
         {

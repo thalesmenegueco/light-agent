@@ -38,6 +38,7 @@ EXPECTED_TOOLS = {
     "run_tests",
     "search_files",
     "set_config",
+    "write_code",
     "write_file",
 }
 
@@ -115,6 +116,26 @@ class TestFsSkills(unittest.TestCase):
         result = DISPATCH["read_file"](path=str(self.root / "nope.txt"))
         self.assertIn("error", result)
 
+    def test_read_file_line_window(self):
+        result = DISPATCH["read_file"](path=str(self.root / "a.txt"), start_line=2, max_lines=1)
+        self.assertEqual(result["content"], "world\n")
+        self.assertEqual(result["start_line"], 2)
+        self.assertEqual(result["end_line"], 2)
+        self.assertEqual(result["total_lines"], 2)
+
+    def test_read_file_line_numbers(self):
+        result = DISPATCH["read_file"](path=str(self.root / "a.txt"), line_numbers=True)
+        self.assertEqual(result["content"], "   1: hello\n   2: world\n")
+
+    def test_read_file_start_past_eof(self):
+        result = DISPATCH["read_file"](path=str(self.root / "a.txt"), start_line=99)
+        self.assertEqual(result["content"], "")
+        self.assertEqual(result["total_lines"], 2)
+
+    def test_read_file_window_truncation_flag(self):
+        result = DISPATCH["read_file"](path=str(self.root / "a.txt"), max_lines=1)
+        self.assertTrue(result["truncated"])
+
     # move_file
     def test_move_file(self):
         dest = self.root / "dir" / "moved.txt"
@@ -165,6 +186,48 @@ class TestFsSkills(unittest.TestCase):
     def test_open_file_missing(self):
         result = DISPATCH["open_file"](path=str(self.root / "nope.txt"))
         self.assertIn("error", result)
+
+
+class TestWriteCode(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_strips_fenced_code(self):
+        target = self.root / "hello.py"
+        content = 'Sure!\n```python\nprint("hi")\n```\n'
+        result = DISPATCH["write_code"](path=str(target), content=content)
+        self.assertIn("written_to", result)
+        self.assertEqual(target.read_text(encoding="utf-8"), 'print("hi")')
+
+    def test_no_fence_passthrough(self):
+        target = self.root / "hello.py"
+        result = DISPATCH["write_code"](path=str(target), content='print("hi")')
+        self.assertIn("written_to", result)
+        self.assertEqual(target.read_text(encoding="utf-8"), 'print("hi")')
+
+    def test_overwrite_guard(self):
+        target = self.root / "a.py"
+        target.write_text("old", encoding="utf-8")
+        result = DISPATCH["write_code"](path=str(target), content="new")
+        self.assertIn("error", result)
+        self.assertEqual(target.read_text(encoding="utf-8"), "old")
+
+    def test_overwrite_true(self):
+        target = self.root / "a.py"
+        target.write_text("old", encoding="utf-8")
+        result = DISPATCH["write_code"](path=str(target), content="new", overwrite=True)
+        self.assertIn("written_to", result)
+        self.assertEqual(target.read_text(encoding="utf-8"), "new")
+
+    def test_empty_content_writes_empty_file(self):
+        target = self.root / "empty.py"
+        result = DISPATCH["write_code"](path=str(target), content="")
+        self.assertIn("written_to", result)
+        self.assertEqual(target.read_text(encoding="utf-8"), "")
 
 
 class TestReplaceFile(unittest.TestCase):

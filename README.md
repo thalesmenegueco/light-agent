@@ -29,6 +29,8 @@ light-agent/
 ├── platform_utils.py    # OS dispatch (open_path) + path confinement (normalize_path/confined_path/set_project_root)
 ├── logging_setup.py     # rotating file logging → logs/mini-agent.log (1 MB × 3)
 ├── demo.py              # offline showcase (no Ollama)
+├── eval_coding.py       # coding-skill eval harness (tasks + deterministic checks -> pass rate)
+├── coding_tasks.json    # sample tasks for eval_coding.py
 ├── requirements.txt     # requests>=2.31,<3.0  (the only runtime dep)
 ├── requirements-build.txt # pyinstaller (build-time only)
 ├── mini-agent.spec      # PyInstaller build config (one-file console app)
@@ -41,7 +43,7 @@ light-agent/
 │   ├── meta_skills.py   # list_skills/get_config/set_config (validates + persists)
 │   ├── run_command_skills.py  # run_command (deny-by-default safety policy)
 │   └── verify_skills.py # run_tests (runs the config-side test_command; verification loop)
-├── tests/               # 184 tests (offline, no Ollama)
+├── tests/               # 229 tests (offline, no Ollama)
 │   ├── test_skills.py             # registry + fs/search + fast path
 │   ├── test_git_skills.py         # read-only git (+ git fast paths)
 │   ├── test_git_mutation_policy.py # git commit/checkpoint/rollback gate
@@ -55,6 +57,7 @@ light-agent/
 │   ├── test_verify_skills.py      # run_tests verification skill
 │   ├── test_session.py            # session-state persistence
 │   ├── test_autopilot.py          # budget + planner parsing + resume loop
+│   ├── test_eval_coding.py        # eval harness checks/loader/scorer (offline)
 │   └── test_run_command_path_confinement.py  # argv-level run_command confinement
 ├── logs/                # mini-agent.log (.gitkeep, gitignored)
 ├── assets/              # (empty, reserved for packaging assets)
@@ -128,9 +131,12 @@ In autopilot mode **no terminal confirmers are bound**, so every `confirm`-gated
 
 ### Testing
 ```bash
-python3 -m unittest   # 184 tests pass, offline, no Ollama (~4 s)
-python3 demo.py       # offline showcase, reports 20 tools
+python3 -m unittest   # 229 tests pass, offline, no Ollama (~4 s)
+python3 demo.py       # offline showcase, reports 21 tools
+python3 eval_coding.py  # score coding tasks (needs Ollama + the coder model)
 ```
+
+`eval_coding.py` runs `coding_tasks.json` against the coder leaf (`qwen2.5-coder:3b`) and reports a pass rate using deterministic check rules (`contains` / `not_contains` / `regex`); edit the JSON (or point `--tasks` at your own file) to add tasks.
 `tests/test_run_command_cli.py` drives the real `terminal_confirmer` through a real subprocess with real stdin (the only test that touches a live terminal). Everything else uses scripted/mocked confirmers and `requests`.
 
 ### Roadmap / known gaps
@@ -203,8 +209,9 @@ The list / open / read / search / find / git-status / git-log / git-diff / list-
 | Skill | Kind | What it does |
 |-------|------|--------------|
 | `list_files` | deterministic | List files and folders in a directory |
-| `read_file` | deterministic | Read a text file (truncated at 8000 chars) |
+| `read_file` | deterministic | Read a text file — line window (`start_line`/`max_lines`), optional line numbers |
 | `write_file` | deterministic (gated) | Create / overwrite a text file |
+| `write_code` | deterministic (gated) | Write generated code to a file (strips markdown fences) |
 | `append_file` | deterministic (gated) | Append text to a file |
 | `move_file` | deterministic (gated) | Move / rename a file |
 | `replace_in_file` | deterministic (gated) | Replace text in a file (first occurrence, or all with `replace_all=true`) |

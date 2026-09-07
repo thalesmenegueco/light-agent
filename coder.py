@@ -16,6 +16,17 @@ logger = logging.getLogger(__name__)
 # logged and not retried -- the real request still runs (possibly slowly).
 _WARMED = False
 
+# Output contract for the coder leaf. It is asked both to *explain* and to
+# *produce* code; this prompt pins down which shape to return so a generated
+# file can be written verbatim (via `write_code`) without the router having to
+# peel off prose or markdown fences.
+SYSTEM_PROMPT = (
+    "You are a coding assistant for a local coding agent. "
+    "When asked to write, generate, or fix a file, output ONLY the code for "
+    "that file -- no markdown fences, no explanations, and no preamble. "
+    "When asked to explain, review, or debug, answer concisely in plain text."
+)
+
 
 def ask_coder(config: dict, instruction: str, file_content: str | None = None) -> str:
     """
@@ -42,7 +53,10 @@ def ask_coder(config: dict, instruction: str, file_content: str | None = None) -
 
     payload = {
         "model": config["coder_model"],
-        "messages": [{"role": "user", "content": "\n".join(prompt_parts)}],
+        "messages": [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": "\n".join(prompt_parts)},
+        ],
         "stream": False,
         "options": {"temperature": config.get("coder_temperature", 0.1)},
     }

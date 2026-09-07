@@ -57,6 +57,7 @@ class TestFileMutationPolicy(unittest.TestCase):
         self.assertEqual(fs.write_file(str(self.root / "new.txt"), "y")["reason"], "mutation_disabled")
         self.assertEqual(fs.append_file(str(a), "y")["reason"], "mutation_disabled")
         self.assertEqual(fs.replace_in_file(str(a), "x", "y")["reason"], "mutation_disabled")
+        self.assertEqual(fs.write_code(str(self.root / "c.txt"), "y")["reason"], "mutation_disabled")
         self.assertEqual(
             fs.move_file(str(a), str(self.root / "b.txt"))["reason"], "mutation_disabled"
         )
@@ -97,6 +98,13 @@ class TestFileMutationPolicy(unittest.TestCase):
         result = fs.append_file(str(f), "b\n")
         self.assertIn("appended_to", result)
         self.assertEqual(f.read_text(encoding="utf-8"), "a\nb\n")
+
+    def test_confirm_allow_writes_code_stripped(self):
+        self._bind("confirm", _confirmer("allow"))
+        target = self.root / "a.py"
+        result = fs.write_code(str(target), '```python\nprint(1)\n```')
+        self.assertIn("written_to", result)
+        self.assertEqual(target.read_text(encoding="utf-8"), "print(1)")
 
     def test_confirm_deny_replace_leaves_file(self):
         self._bind("confirm", _confirmer("deny"))

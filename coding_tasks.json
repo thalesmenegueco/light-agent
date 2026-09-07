@@ -1,0 +1,36 @@
+[
+  {
+    "id": "fizzbuzz",
+    "prompt": "Write a Python function fizzbuzz(n) that returns 'Fizz' if n is divisible by 3, 'Buzz' if divisible by 5, 'FizzBuzz' if divisible by both, otherwise str(n). Output only the function code.",
+    "checks": [
+      {"type": "contains", "value": "def fizzbuzz"},
+      {"type": "contains", "value": "FizzBuzz"},
+      {"type": "not_contains", "value": "```"}
+    ]
+  },
+  {
+    "id": "reverse_string",
+    "prompt": "Write a Python function reverse_string(s) that returns the reversed string. Output only the function code.",
+    "checks": [
+      {"type": "contains", "value": "def reverse_string"},
+      {"type": "regex", "value": "s[::-1]|reversed\\("},
+      {"type": "not_contains", "value": "```"}
+    ]
+  },
+  {
+    "id": "fibonacci",
+    "prompt": "Write a Python function fib(n) that returns the n-th Fibonacci number using an iterative loop. Output only the function code.",
+    "checks": [
+      {"type": "contains", "value": "def fib"},
+      {"type": "regex", "value": "while |for "},
+      {"type": "not_contains", "value": "```"}
+    ]
+  },
+  {
+    "id": "explain_bug",
+    "prompt": "This code raises an error. Explain why, in one or two plain sentences, without writing any code.\n\n--- FILE CONTENT ---\nx = [1, 2, 3]\nprint(x[3])\n",
+    "checks": [
+      {"type": "regex", "value": "index|out of range|IndexError", "case_sensitive": false}
+    ]
+  }
+]
