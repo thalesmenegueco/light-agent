@@ -15,6 +15,7 @@ passes through a multi-stage policy before anything executes:
     network     -> network programs -> refuse unless allow_network
     resolve     -> unknown program -> refuse
     cwd         -> missing working dir -> refuse
+    argv        -> argument paths escaping the project root -> refuse
     classify    -> readonly / allowlisted / needs-confirmation
     confirm     -> human confirmation (fail-closed if no confirmer)
     execute     -> subprocess.run(shell=config, timeout, DEVNULL stdin)
@@ -39,7 +40,7 @@ import subprocess
 from pathlib import Path
 
 from config import save_config
-from platform_utils import confined_path, split_command
+from platform_utils import confined_path, get_project_root, split_command
 
 logger = logging.getLogger(__name__)
 
@@ -203,13 +204,74 @@ def _resolve_cwd(config: dict, cwd_arg: str):
     """Return a working-directory string, or an error dict."""
     raw = (cwd_arg or "").strip() or (config.get("run_command_cwd") or "").strip()
     if not raw:
-        return None
+        # No explicit cwd: when a project root is configured, run inside it
+        # (so inheritance can't escape confinement); otherwise inherit.
+        root = get_project_root()
+        return str(root) if root is not None else None
     p, err = confined_path(raw)
     if err:
         return {"error": err["error"], "reason": "cwd_outside_root"}
     if not p.is_dir():
         return {"error": f"Working directory not found: {raw}", "reason": "cwd"}
     return str(p)
+
+
+_WINDOWS_DRIVE_RE = re.compile(r"^[A-Za-z]:[\\/]")
+
+
+def _looks_like_path(token: str, base: Path) -> bool:
+    """Heuristic: does an argv token plausibly name a filesystem path?
+
+    True for absolute paths, `~`-prefixed paths, drive-letter paths, tokens
+    with a path separator or a `..` segment, and bare tokens that already exist
+    under `base` (so a symlink pointing outside the root is still caught).
+    False for flags and plain words, which resolve within the root anyway.
+    """
+    if not token:
+        return False
+    if token.startswith("~"):
+        return True
+    if Path(token).is_absolute():
+        return True
+    if _WINDOWS_DRIVE_RE.match(token):
+        return True
+    if "/" in token or "\\" in token:
+        return True
+    if ".." in token:
+        return True
+    return (base / token).exists()
+
+
+def _argv_escapes_root(argv: list[str], workdir: str | None) -> list[str] | None:
+    """Return argument paths that escape project_root, or None if none.
+
+    Only active when a project root is configured. Skips the program token and
+    option flags, then resolves every path-looking argument against the confined
+    working directory and flags anything that escapes the root (via an absolute
+    path, `..`, `~`, or a symlink pointing outside).
+    """
+    root = get_project_root()
+    if root is None:
+        return None
+    base = Path(workdir) if workdir else root
+    offenders = []
+    for token in argv[1:]:
+        if token.startswith("-"):
+            continue
+        if not _looks_like_path(token, base):
+            continue
+        p = Path(token).expanduser()
+        if not p.is_absolute():
+            p = base / p
+        try:
+            resolved = p.resolve()
+        except OSError:
+            continue
+        try:
+            resolved.relative_to(root)
+        except ValueError:
+            offenders.append(token)
+    return offenders or None
 
 
 def _add_to_allowlist(config: dict, program: str) -> None:
@@ -347,6 +409,16 @@ def run_command(command: str, cwd: str = "") -> dict:
     workdir = _resolve_cwd(config, cwd)
     if isinstance(workdir, dict):
         return workdir
+
+    escape = _argv_escapes_root(argv, workdir)
+    if escape:
+        logger.warning("run_command refused (argv_outside_root): %r", escape)
+        return {
+            "error": f"Refusing to run: argument path(s) outside the project root: {', '.join(escape)}.",
+            "reason": "argv_outside_root",
+            "paths": escape,
+            "command": command,
+        }
 
     approved: str | None = None
     auto = (mode == "auto" and _is_readonly(argv, prog_name)) or (

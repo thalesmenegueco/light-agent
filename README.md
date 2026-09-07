@@ -132,7 +132,7 @@ python3 demo.py       # offline showcase, reports 20 tools
 ### Roadmap / known gaps
 - Fast path is a fixed phrase table (extend via a `FastPath` entry); the tool loop is recursive but capped at `max_tool_rounds`.
 - `run_command` "always allow" persists to the allowlist but only auto-runs in `allowlist`/`auto` modes.
-- **`run_command` argv-level path confinement is not implemented** — only the `cwd` is confined; command *content* (e.g. `cat /etc/passwd`) stays governed by the deny/allow model.
+- `run_command` argv-level confinement is heuristic: it flags argument paths that escape `project_root` (absolute, `..`, `~`, symlinks) but skips option flags and plain words; a non-path argument that happens to look like an absolute path (e.g. a `grep` pattern) is refused on the safe side. The program token itself (`argv[0]`) is not confined — running an outside program binary is still governed by the deny/allowlist/confirm model.
 - The session token budget counts the **router** model only (eval + prompt-eval per call); the coder leaf's tokens aren't tallied yet.
 - Resume is "at-least-once": a step marked `in_progress` when a crash lands may re-run on resume.
 - Natural next skills: `copy_file`, `delete_file`/`move_to_trash`, `file_info`, `tree`, `count_lines`, `diff_files`, `fetch_url` (network, opt-in). Mutating/network ones must land behind the same gating as the existing policies.
@@ -227,15 +227,16 @@ The list / open / read / search / find / git-status / git-log / git-diff / list-
 2. **no eval** — interpreter `-c`/`-e` escapes (`python -c`, `sh -c`) are refused.
 3. **no TTY** — interactive/privileged programs (`vim`, `sudo`, `ssh`, pagers) are refused.
 4. **no network** — `curl`, `pip`, `git push`, etc. are refused unless `run_command_allow_network` is set.
-5. **human confirmation** — anything else prompts with the exact command + cwd (fail-closed if no confirmer is bound); "always allow" persists the program to the allowlist.
+5. **argv confinement** — when `project_root` is set, argument paths that escape it (absolute paths, `..`, `~`, symlinks) are refused; the working directory also defaults to the root when none is given.
+6. **human confirmation** — anything else prompts with the exact command + cwd (fail-closed if no confirmer is bound); "always allow" persists the program to the allowlist.
 
-The model only ever sees `command` and `cwd`; shell, timeout, allowlist, denylist, network and cwd-confinement are config-side. Modes: `off` → `confirm` → `allowlist` → `auto`.
+The model only ever sees `command` and `cwd`; shell, timeout, allowlist, denylist, network, argv and cwd-confinement are config-side. Modes: `off` → `confirm` → `allowlist` → `auto`.
 
 **Enabling** (session-only, recommended): start with `python main.py --run-command-mode confirm`, then ask it to "run the command `python3 --version`". To persist, set `run_command_mode` in `config.json`, or tell the agent `set run_command_mode to confirm`. The confirmation → execution path is covered by live-terminal tests in `tests/test_run_command_cli.py` (real subprocess + real stdin, no Ollama).
 
 ### Path confinement
 
-By default the agent can read/write any path (`project_root` is empty). Set `project_root` to a directory, and every filesystem, git, and search skill resolves paths against it — and refuses anything that escapes it via `..`, an absolute path, or a symlink (the `run_command` working directory is confined the same way). This is the first safety layer for unattended/autopilot use: confine the agent to the project it's allowed to touch.
+By default the agent can read/write any path (`project_root` is empty). Set `project_root` to a directory, and every filesystem, git, and search skill resolves paths against it — and refuses anything that escapes it via `..`, an absolute path, or a symlink. `run_command` is confined the same way: its working directory defaults to the root, and argument paths that escape it are refused. This is the first safety layer for unattended/autopilot use: confine the agent to the project it's allowed to touch.
 
 ```json
 { "project_root": "/home/you/your-project" }
