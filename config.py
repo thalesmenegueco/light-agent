@@ -29,6 +29,8 @@ DEFAULT_CONFIG = {
     "log_file": "",               # empty = <app_dir>/logs/mini-agent.log
     # path confinement (see platform_utils.normalize_path). "" = no confinement.
     "project_root": "",
+    # file mutation policy (see skills/fs_skills.py): off | confirm | allow
+    "file_mutation_mode": "allow",
     # run_command safety policy (see skills/run_command_skills.py)
     "run_command_mode": "off",           # off | confirm | allowlist | auto
     "run_command_allowlist": [],         # program names allowed without confirmation

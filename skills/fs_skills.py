@@ -11,6 +11,80 @@ from pathlib import Path
 
 from platform_utils import confined_path, open_path
 
+_CONFIG = None
+_FILE_CONFIRMER = None  # callable(op, path, detail) -> "allow" | "deny"
+
+_MUTATION_MODES = {"off", "confirm", "allow"}
+
+
+def bind_config(config: dict) -> None:
+    global _CONFIG
+    _CONFIG = config
+
+
+def bind_file_confirmer(confirmer) -> None:
+    global _FILE_CONFIRMER
+    _FILE_CONFIRMER = confirmer
+
+
+def terminal_file_confirmer(op: str, path: str, detail: str) -> str:
+    """Interactive confirmation prompt for file mutations. Returns allow/deny."""
+    print(f"\n{op} wants to mutate a file:")
+    print(f"  path  : {path}")
+    if detail:
+        print(f"  detail: {detail}")
+    while True:
+        answer = input("Allow? [y]es / [n]o: ").strip().lower()
+        if answer in {"y", "yes", "allow"}:
+            return "allow"
+        if answer in {"n", "no", "deny"}:
+            return "deny"
+        print("Please answer 'y' or 'n'.")
+
+
+def _check_mutation(op: str, path: str, detail: str = "") -> dict | None:
+    """Return an error dict to refuse a file mutation, or None to allow it.
+
+    Controlled by file_mutation_mode:
+      off     -> refuse every mutation
+      confirm -> require the injected confirmer (fail-closed if none bound)
+      allow   -> proceed without prompting (the default)
+    """
+    mode = str((_CONFIG or {}).get("file_mutation_mode", "allow")).lower()
+    if mode == "off":
+        return {
+            "error": f"{op} is disabled; set 'file_mutation_mode' in config to enable it.",
+            "reason": "mutation_disabled",
+            "operation": op,
+        }
+    if mode not in _MUTATION_MODES:
+        return {"error": f"Unknown file_mutation_mode: {mode!r}", "reason": "config", "operation": op}
+    if mode == "allow":
+        return None
+
+    # mode == "confirm"
+    if _FILE_CONFIRMER is None:
+        return {
+            "error": f"{op} requires confirmation but no confirmer is bound (fail-closed).",
+            "reason": "confirm_unavailable",
+            "operation": op,
+        }
+    answer = _FILE_CONFIRMER(op, path, detail)
+    if answer == "allow":
+        return None
+    if answer == "deny":
+        return {
+            "error": f"{op} not performed (denied).",
+            "reason": "user_denied",
+            "operation": op,
+            "refused": True,
+        }
+    return {
+        "error": "Confirmation did not approve the mutation (fail-closed).",
+        "reason": "user_denied",
+        "operation": op,
+    }
+
 
 def list_files(path: str) -> dict:
     """List file and folder names inside a given directory."""
@@ -61,6 +135,10 @@ def move_file(source: str, destination: str) -> dict:
     if not src.exists():
         return {"error": f"Source not found: {src}"}
 
+    refused = _check_mutation("move_file", str(src), f"{src} -> {dst}")
+    if refused:
+        return refused
+
     try:
         dst.parent.mkdir(parents=True, exist_ok=True)
         src.rename(dst)
@@ -78,6 +156,10 @@ def write_file(path: str, content: str, overwrite: bool = False) -> dict:
     if p.exists() and not overwrite:
         return {"error": f"File already exists: {p} (set overwrite=true to replace it)"}
 
+    refused = _check_mutation("write_file", str(p), f"content: {content[:80]!r}")
+    if refused:
+        return refused
+
     try:
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(content, encoding="utf-8")
@@ -92,6 +174,9 @@ def append_file(path: str, content: str) -> dict:
     p, err = confined_path(path)
     if err:
         return err
+    refused = _check_mutation("append_file", str(p), f"append: {content[:80]!r}")
+    if refused:
+        return refused
     try:
         p.parent.mkdir(parents=True, exist_ok=True)
         with p.open("a", encoding="utf-8") as fh:
@@ -137,6 +222,9 @@ def replace_in_file(path: str, old: str, new: str, replace_all: bool = False) ->
         }
 
     new_text = text.replace(old, new) if replace_all else text.replace(old, new, 1)
+    refused = _check_mutation("replace_in_file", str(p), f"{old!r} -> {new!r}")
+    if refused:
+        return refused
     try:
         p.write_text(new_text, encoding="utf-8")
     except OSError as exc:

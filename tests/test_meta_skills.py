@@ -77,6 +77,16 @@ class TestConfigSkills(unittest.TestCase):
         mock_save.assert_not_called()
 
     @patch.object(meta, "save_config")
+    def test_set_config_mutates_bound_config_in_place(self, mock_save):
+        # main.py holds the same dict it passed to bind_config; a runtime
+        # set_config must mutate that object so per-turn reads see the change.
+        cfg = dict(DEFAULT_CONFIG)
+        meta.bind_config(cfg)
+        DISPATCH["set_config"](updates={"max_history_messages": 50})
+        self.assertEqual(cfg["max_history_messages"], 50)
+        mock_save.assert_called_once()
+
+    @patch.object(meta, "save_config")
     @patch.object(meta, "set_project_root")
     def test_set_config_project_root_reapplies_root(self, mock_set_root, mock_save):
         result = DISPATCH["set_config"](updates={"project_root": "/tmp/x"})

@@ -16,7 +16,7 @@ import requests
 from config import load_config
 from logging_setup import setup_logging
 from router import handle_message, warm_up
-from skills import DISPATCH, init_skills, run_command_skills
+from skills import DISPATCH, fs_skills, init_skills, run_command_skills
 
 logger = logging.getLogger(__name__)
 
@@ -389,6 +389,8 @@ def main() -> None:
     # Bind the interactive confirmation prompt for run_command. It stays inert
     # while run_command_mode is "off" (the default); the user opts in via config.
     run_command_skills.bind_confirmer(run_command_skills.terminal_confirmer)
+    # Same for file mutations: inert unless file_mutation_mode is "confirm".
+    fs_skills.bind_file_confirmer(fs_skills.terminal_file_confirmer)
 
     log_file = setup_logging(config)
     if args.run_command_mode:
@@ -424,9 +426,13 @@ def main() -> None:
             f"[run_command] mode: {config['run_command_mode']} — "
             "commands will prompt for confirmation before running.\n"
         )
+    fm_mode = config.get("file_mutation_mode", "allow")
+    if fm_mode == "off":
+        print("[file_mutation] mode: off — write/append/replace/move are disabled.\n")
+    elif fm_mode == "confirm":
+        print("[file_mutation] mode: confirm — file edits will prompt for confirmation.\n")
 
     history: list[dict] = []
-    max_history = config.get("max_history_messages", 12)
 
     while True:
         try:
@@ -459,8 +465,9 @@ def main() -> None:
             )
             continue
 
-        # Keep context small for the router on limited hardware.
-        history = history[-max_history:]
+        # Keep context small for the router on limited hardware. Read the limit
+        # each turn so a runtime `set_config` of max_history_messages takes effect.
+        history = history[-config.get("max_history_messages", 12):]
         print(reply)
 
 

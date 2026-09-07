@@ -2,7 +2,111 @@
 
 ## Intro
 
-OpenRouter/Kilo Code/DeepSeek's agent harness are the build-time tooling only; the running agent stays 100% local via Ollama. Here's the plan.
+OpenRouter/Kilo Code/DeepSeek's agent harness are the build-time tooling only; the running agent stays 100% local via Ollama. The **Phases** below are the original build plan (mostly complete); the **Current state** section is the up-to-date reference — read it first when picking this project back up.
+
+## Current state (context for future sessions)
+
+### What it is
+A fully-local AI coding assistant CLI in Python, running 100% against a local Ollama server (`http://localhost:11434`). Internally named **"MiniAgent"** (`APP_NAME = "MiniAgent"`, MIT). Only runtime dependency is `requests`; everything else is stdlib. The running agent never calls a cloud model — build-time tooling (Kilo Code / OpenRouter / DeepSeek harness) is used only to write/debug code.
+
+### Architecture — two local models
+| Role | Model | Job |
+|------|-------|-----|
+| Router | `qwen3:4b-instruct` | conversation + the **tool-calling loop** (decides which skill to run) |
+| Coder | `qwen2.5-coder:3b` | a "leaf" node (no tools, no history) called *as a skill* |
+
+Both via Ollama's `/api/chat`. CPU-only inference (~5–6 tok/s) — tokens-per-turn is the dominant cost, which ruled out "thinking"/CoT models for the router (see [Router model notes](#router-model-notes)).
+
+### File structure (current)
+```
+light-agent/
+├── main.py              # CLI entry: argparse (--run-command-mode), warm-up, fast-path, loop, history trim, errors
+├── config.py            # cross-platform config, JSON-persisted (DEFAULT_CONFIG + save/load)
+├── router.py            # recursive tool-calling loop + warm_up(config)
+├── coder.py             # thin wrapper around qwen2.5-coder:3b (leaf)
+├── platform_utils.py    # OS dispatch (open_path) + path confinement (normalize_path/confined_path/set_project_root)
+├── logging_setup.py     # rotating file logging → logs/mini-agent.log (1 MB × 3)
+├── demo.py              # offline showcase (no Ollama)
+├── requirements.txt     # requests>=2.31,<3.0  (the only dep)
+├── skills/
+│   ├── __init__.py      # registry: auto-discovers SCHEMAS → TOOLS[] + DISPATCH{}; init_skills(config)
+│   ├── fs_skills.py     # list/read/write/append/move/replace_in_file/open_file (+ file-mutation gate)
+│   ├── search_skills.py # search_files (name/content/both; results sorted)
+│   ├── git_skills.py    # git_status/diff/log (read-only)
+│   ├── code_skills.py   # run_coder → coder leaf (bind_config)
+│   ├── meta_skills.py   # list_skills/get_config/set_config (validates + persists)
+│   └── run_command_skills.py  # run_command (deny-by-default safety policy)
+├── tests/               # 134 tests (offline, no Ollama)
+│   ├── test_skills.py             # registry + fs/search + fast path
+│   ├── test_git_skills.py         # read-only git (+ git fast paths)
+│   ├── test_meta_skills.py        # meta skills + set_config re-apply + in-place config
+│   ├── test_logging.py            # logging setup
+│   ├── test_run_command.py        # run_command policy (scripted confirmer)
+│   ├── test_run_command_cli.py    # live-terminal subprocess test (real stdin)
+│   ├── test_router.py             # warm_up + recursive tool loop
+│   ├── test_path_confinement.py   # path confinement
+│   └── test_file_mutation_policy.py  # file mutation gate
+├── logs/                # mini-agent.log (.gitkeep, gitignored)
+├── assets/              # (empty, reserved for packaging assets)
+├── .gitignore
+├── LICENSE
+└── README.md
+```
+
+### Skill contract
+Each skill module exposes `SCHEMAS = [(schema_dict, function), ...]`; `skills/__init__.py` auto-registers them into `TOOLS` (the OpenAI-style function schemas sent to the router) and `DISPATCH` (`{name: function}`). **Adding a skill = new file + one import in `skills/__init__.py`; `router.py` never changes.** Some skills need config or a confirmer, injected at startup via `bind_config()` / `bind_confirmer()` / `bind_file_confirmer()` (see [Startup flow](#startup-flow)).
+
+### Configuration (every key in `DEFAULT_CONFIG`)
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `ollama_host` | `http://localhost:11434` | Ollama server |
+| `router_model` | `qwen3:4b-instruct` | tool-calling model |
+| `coder_model` | `qwen2.5-coder:3b` | coding leaf model |
+| `router_temperature` | `0.2` | router sampling temp |
+| `coder_temperature` | `0.1` | coder sampling temp |
+| `max_history_messages` | `12` | conversation context window (read per-turn) |
+| `max_tool_rounds` | `4` | tool-calling rounds before forcing a final answer |
+| `log_level` | `INFO` | `DEBUG`/`INFO`/`WARNING`/`ERROR` |
+| `log_file` | `""` | `""` = `<app_dir>/logs/mini-agent.log` |
+| `project_root` | `""` | path-confinement root; `""` = no confinement |
+| `file_mutation_mode` | `allow` | `off` / `confirm` / `allow` for write/append/move/replace |
+| `run_command_mode` | `off` | `off` / `confirm` / `allowlist` / `auto` |
+| `run_command_allowlist` | `[]` | programs allowed without confirmation |
+| `run_command_denylist` | `[]` | extra refusal literals (merged with built-ins) |
+| `run_command_timeout` | `30` | seconds before a command is killed |
+| `run_command_max_output` | `8000` | chars, per stdout/stderr |
+| `run_command_cwd` | `""` | `""` = inherit; else fixed working dir |
+| `run_command_shell` | `false` | allow shell operators at all |
+| `run_command_allow_network` | `false` | allow network-touching programs |
+
+Config lives at `%APPDATA%\MiniAgent\config.json` (Windows) / `~/.config/mini-agent/config.json` (Linux). `set_config` validates against these keys and persists; `project_root` is re-applied live (all other consumers read keys lazily).
+
+### Safety layers (three, complementary)
+1. **`run_command`** — deny-by-default local command execution (off by default; see below).
+2. **`project_root`** — path confinement for every file/git/search skill and `run_command`'s cwd (off by default).
+3. **`file_mutation_mode`** — gates `write/append/move/replace` (`allow` by default; `confirm`/`off` for unattended).
+
+### Startup flow / CLI
+`python main.py` → load config → `init_skills(config)` (binds config to coder/meta/run_command/fs + sets `project_root`) → bind the two terminal confirmers → setup logging → Ollama health check (exit if unreachable) → **warm-up** (a `num_predict:1` chat call so the first turn doesn't hit the ~30–45s cold load; non-fatal) → ready banner → input loop.
+
+- Flag `--run-command-mode {off,confirm,allowlist,auto}` is a session-only (non-persisted) override; a startup hint prints when `run_command_mode` ≠ `off` or `file_mutation_mode` ≠ `allow`.
+- **Fast path** (`_FAST_PATHS` in `main.py`) short-circuits ~9 deterministic phrasings (list/open/read/cat/search/find/git-status/git-log/git-diff/list-skills/set-project-root) straight to the skill, skipping the router; anything unmatched (or whose skill errors) falls through to the router.
+- The router's tool loop is **recursive** (multi-round), bounded by `max_tool_rounds`; intermediate tool messages never enter the persisted history.
+
+### Testing
+```bash
+python3 -m unittest   # 134 tests pass, offline, no Ollama (~2.4 s)
+python3 demo.py       # offline showcase, reports 16 tools
+```
+`tests/test_run_command_cli.py` drives the real `terminal_confirmer` through a real subprocess with real stdin (the only test that touches a live terminal). Everything else uses scripted/mocked confirmers and `requests`.
+
+### Roadmap / known gaps
+- Fast path is a fixed phrase table (extend via a `FastPath` entry); the tool loop is recursive but capped at `max_tool_rounds`.
+- `run_command` "always allow" persists to the allowlist but only auto-runs in `allowlist`/`auto` modes.
+- **`run_command` argv-level path confinement is not implemented** — only the `cwd` is confined; command *content* (e.g. `cat /etc/passwd`) stays governed by the deny/allow model.
+- Natural next skills: `copy_file`, `delete_file`/`move_to_trash`, `file_info`, `tree`, `count_lines`, `diff_files`, `fetch_url` (network, opt-in).
+- Phase 5 = PyInstaller packaging + cross-platform testing (`sys.frozen`/`sys.executable`).
+- Unattended "autopilot" still needs: a verification loop (run tests + feed failures back to the coder), git checkpoint/rollback, plan/persistence/resume, a session budget (steps/time/tokens), and a planner-vs-executor separation.
 
 ## Try it now
 
@@ -58,10 +162,10 @@ The list / open / read / search / find / git-status / git-log / git-diff / list-
 |-------|------|--------------|
 | `list_files` | deterministic | List files and folders in a directory |
 | `read_file` | deterministic | Read a text file (truncated at 8000 chars) |
-| `write_file` | deterministic | Create / overwrite a text file |
-| `append_file` | deterministic | Append text to a file |
-| `move_file` | deterministic | Move / rename a file |
-| `replace_in_file` | deterministic | Replace text in a file (first occurrence, or all with `replace_all=true`) |
+| `write_file` | deterministic (gated) | Create / overwrite a text file |
+| `append_file` | deterministic (gated) | Append text to a file |
+| `move_file` | deterministic (gated) | Move / rename a file |
+| `replace_in_file` | deterministic (gated) | Replace text in a file (first occurrence, or all with `replace_all=true`) |
 | `open_file` | deterministic | Open a file or folder in the OS default app |
 | `search_files` | deterministic | Find files by name or grep text inside files |
 | `git_status` | deterministic (read-only) | Show branch + working-tree status |
@@ -97,6 +201,20 @@ By default the agent can read/write any path (`project_root` is empty). Set `pro
 
 An empty `project_root` (the default) disables confinement and paths behave exactly as before. Set it in `config.json`, or tell the agent `set project_root to /home/you/your-project`.
 
+### File mutation policy
+
+The mutating filesystem skills (`write_file`, `append_file`, `move_file`, `replace_in_file`) are gated by `file_mutation_mode`, mirroring the `run_command` safety model:
+
+- `allow` (default) — mutations run without prompting (the original behavior).
+- `confirm` — every mutation prompts for confirmation; **fails closed** if no confirmer is bound, so an unattended agent cannot write.
+- `off` — all mutations are refused; the agent becomes read-only.
+
+```json
+{ "file_mutation_mode": "confirm" }
+```
+
+For unattended/autopilot use, set `file_mutation_mode` to `off` (read-only) or `confirm` (only works with a human at the terminal), and rely on `project_root` as the boundary when you do allow writes. `open_file` and the read-only skills are unaffected.
+
 ## Phase 0 — Foundations (before any agent logic)
 
 - Install Ollama on both machines, pull `qwen3:4b-instruct` (router) and `qwen2.5-coder:3b` (coder).
@@ -104,6 +222,8 @@ An empty `project_root` (the default) disables confinement and paths behave exac
 - Decide the skills storage location: `%APPDATA%\MiniAgent\skills\` (Windows) / `~/.config/mini-agent/skills/` (Linux), same auto-detect pattern as your other tools.
 
 ## Phase 1 — Project skeleton
+
+*(Original plan layout — see [Current state](#current-state-context-for-future-sessions) for the files as they exist today, which include `run_command_skills.py` and the extra test files.)*
 
 ```
 mini-agent/
@@ -129,7 +249,7 @@ mini-agent/
 └── logs/                # mini-agent.log written here at runtime
 ```
 
-**Skill contract** — every skill is a plain function + a schema dict, e.g.:
+**Skill contract** — every skill is a plain function + a schema dict, exposed as `SCHEMAS = [(schema, function), ...]`, e.g.:
 
 ```python
 # skills/fs_skills.py
@@ -137,28 +257,35 @@ def list_files(path: str) -> dict:
     p = Path(path)
     return {"files": [f.name for f in p.iterdir()]} if p.exists() else {"error": "not found"}
 
-SCHEMA = {
-    "type": "function",
-    "function": {
-        "name": "list_files",
-        "description": "List file names in a given folder",
-        "parameters": {
-            "type": "object",
-            "properties": {"path": {"type": "string"}},
-            "required": ["path"]
-        }
-    }
-}
+SCHEMAS = [
+    (
+        {
+            "type": "function",
+            "function": {
+                "name": "list_files",
+                "description": "List file names in a given folder",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"path": {"type": "string"}},
+                    "required": ["path"]
+                }
+            }
+        },
+        list_files,
+    ),
+]
 ```
 
-`skills/__init__.py` scans the module, builds `TOOLS = [schema, ...]` and a `dispatch = {name: func}` dict. Adding a skill later = new function + new file, nothing else changes — this is the "expand skills over time" capability you wanted.
+`skills/__init__.py` scans each module's `SCHEMAS`, builds `TOOLS = [schema, ...]` and `DISPATCH = {name: func}`. Adding a skill later = new function + new file, nothing else changes — this is the "expand skills over time" capability you wanted.
 
 ## Phase 2 — Router loop
 
-`router.py` does the standard tool-calling cycle against `qwen3:4b-instruct`:
+`router.py` does the tool-calling cycle against `qwen3:4b-instruct`:
 1. Send user message + `TOOLS` list.
-2. If response has `tool_calls` → look up in `dispatch`, execute locally, feed result back as a `tool` role message, get final natural-language reply.
-3. If no tool call → just return the text (general chat / reasoning that doesn't need a tool).
+2. If response has `tool_calls` → look up in `DISPATCH`, execute locally, feed result back as a `tool` role message, and ask again.
+3. If no tool call → return the text (general chat / reasoning that doesn't need a tool).
+
+*(Now implemented as a **recursive** loop, bounded by `max_tool_rounds` — see [Current state](#current-state-context-for-future-sessions).)*
 
 ## Phase 3 — Coder as a skill, not a separate path
 
