@@ -95,6 +95,18 @@ class TestConfigSkills(unittest.TestCase):
         mock_set_root.assert_called_once_with("/tmp/x")
 
     @patch.object(meta, "save_config")
+    def test_set_config_ollama_timeout_valid(self, mock_save):
+        result = DISPATCH["set_config"](updates={"ollama_timeout": 300})
+        self.assertEqual(result["config"]["ollama_timeout"], 300)
+        mock_save.assert_called_once()
+
+    @patch.object(meta, "save_config")
+    def test_set_config_ollama_timeout_invalid(self, mock_save):
+        result = DISPATCH["set_config"](updates={"ollama_timeout": 0})
+        self.assertIn("error", result)
+        mock_save.assert_not_called()
+
+    @patch.object(meta, "save_config")
     @patch.object(meta, "set_project_root")
     def test_fast_path_set_project_root(self, mock_set_root, mock_save):
         result = main.try_fast_path("set project root to /tmp/x")
@@ -110,6 +122,33 @@ class TestConfigSkills(unittest.TestCase):
         self.assertIsNone(main.try_fast_path("set the temperature to 0.5"))
         mock_save.assert_not_called()
         mock_set_root.assert_not_called()
+
+    def test_fast_path_read_project_root(self):
+        meta._CONFIG["project_root"] = "/tmp/x"
+        result = main.try_fast_path("what's the current project root?")
+        self.assertIsNotNone(result)
+        self.assertIn("/tmp/x", result)
+
+    def test_fast_path_read_project_root_unset(self):
+        self.assertEqual(meta._CONFIG["project_root"], "")
+        result = main.try_fast_path("what's the project root")
+        self.assertIsNotNone(result)
+        self.assertIn("No project root", result)
+
+    def test_fast_path_read_config(self):
+        result = main.try_fast_path("what config are you using?")
+        self.assertIsNotNone(result)
+        self.assertIn("router_model", result)
+        self.assertIn("project_root", result)
+
+    def test_fast_path_read_config_show_phrase(self):
+        result = main.try_fast_path("show me the config")
+        self.assertIsNotNone(result)
+        self.assertIn("run_command_mode", result)
+
+    def test_fast_path_unrelated_config_text_falls_through(self):
+        # A config-sounding sentence that isn't a direct read must NOT match.
+        self.assertIsNone(main.try_fast_path("what should I configure next?"))
 
 
 if __name__ == "__main__":

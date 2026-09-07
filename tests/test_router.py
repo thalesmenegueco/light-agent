@@ -151,6 +151,27 @@ class TestWarmUp(unittest.TestCase):
         with self.assertRaises(requests.RequestException):
             warm_up({"router_model": "x", "ollama_host": "http://h"})
 
+    @patch("router.requests.post")
+    def test_warm_up_preloads_explicit_model(self, mock_post):
+        mock_post.return_value.raise_for_status.return_value = None
+        warm_up(
+            {"router_model": "qwen3:4b-instruct", "ollama_host": "http://h"},
+            "qwen2.5-coder:3b",
+        )
+        self.assertEqual(mock_post.call_args.kwargs["json"]["model"], "qwen2.5-coder:3b")
+
+
+class TestModelTimeout(unittest.TestCase):
+    def test_default(self):
+        self.assertEqual(router.model_timeout({}), 120)
+
+    def test_override(self):
+        self.assertEqual(router.model_timeout({"ollama_timeout": 300}), 300)
+
+    def test_non_positive_falls_back(self):
+        self.assertEqual(router.model_timeout({"ollama_timeout": 0}), 120)
+        self.assertEqual(router.model_timeout({"ollama_timeout": -5}), 120)
+
 
 if __name__ == "__main__":
     unittest.main()

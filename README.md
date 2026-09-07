@@ -74,6 +74,7 @@ Each skill module exposes `SCHEMAS = [(schema_dict, function), ...]`; `skills/__
 | `coder_model` | `qwen2.5-coder:3b` | coding leaf model |
 | `router_temperature` | `0.2` | router sampling temp |
 | `coder_temperature` | `0.1` | coder sampling temp |
+| `ollama_timeout` | `120` | seconds to wait for a model's first byte (chat calls) |
 | `max_history_messages` | `12` | conversation context window (read per-turn) |
 | `max_tool_rounds` | `4` | tool-calling rounds before forcing a final answer |
 | `log_level` | `INFO` | `DEBUG`/`INFO`/`WARNING`/`ERROR` |
@@ -108,10 +109,10 @@ Config lives at `%APPDATA%\MiniAgent\config.json` (Windows) / `~/.config/mini-ag
 `run_tests` adds a fifth, differently-shaped safety property: it runs only the human-configured `test_command`, never a model-supplied command, so the verification loop can run unattended without re-opening arbitrary execution.
 
 ### Startup flow / CLI
-`python main.py` → load config → `init_skills(config)` (binds config to coder/meta/run_command/fs/git/verify + sets `project_root`) → bind the three terminal confirmers (run_command / file-mutation / git-mutation) → setup logging → Ollama health check (exit if unreachable) → **warm-up** (a `num_predict:1` chat call so the first turn doesn't hit the ~30–45s cold load; non-fatal) → ready banner → input loop.
+`python main.py` → load config → `init_skills(config)` (binds config to coder/meta/run_command/fs/git/verify + sets `project_root`) → bind the three terminal confirmers (run_command / file-mutation / git-mutation) → setup logging → Ollama health check (exit if unreachable) → **warm-up** (a `num_predict:1` chat call for the router so the first turn doesn't hit the ~30–45s cold load; the coder model warms lazily on its first actual use — both non-fatal) → ready banner → input loop.
 
 - Flag `--run-command-mode {off,confirm,allowlist,auto}` is a session-only (non-persisted) override; a startup hint prints when `run_command_mode` ≠ `off` or `file_mutation_mode` ≠ `allow`.
-- **Fast path** (`_FAST_PATHS` in `main.py`) short-circuits ~9 deterministic phrasings (list/open/read/cat/search/find/git-status/git-log/git-diff/list-skills/set-project-root) straight to the skill, skipping the router; anything unmatched (or whose skill errors) falls through to the router.
+- **Fast path** (`_FAST_PATHS` in `main.py`) short-circuits ~13 deterministic phrasings (list/open/read/cat/search/find/git-status/git-log/git-diff/list-skills/set-project-root/get-project-root/get-config) straight to the skill, skipping the router; anything unmatched (or whose skill errors) falls through to the router.
 - The router's tool loop is **recursive** (multi-round), bounded by `max_tool_rounds`; intermediate tool messages never enter the persisted history.
 
 ### Autopilot (unattended)
@@ -123,7 +124,7 @@ Config lives at `%APPDATA%\MiniAgent\config.json` (Windows) / `~/.config/mini-ag
 4. **budget** — before every step, `max_session_steps` / `session_timeout_seconds` / `max_session_tokens` are checked; hitting any of them stops the run and marks it `blocked`.
 5. **persist/resume** — progress (goal, plan, step status, budget counters, compact history) is written to `session.json` in the config dir (`~/.config/mini-agent/` / `%APPDATA%\MiniAgent\`) after every step, so a crashed run resumes from the last completed step. Re-run the same `--autopilot "<goal>"` to resume; `--new-session` discards saved state and starts fresh.
 
-In autopilot mode **no terminal confirmers are bound**, so every `confirm`-gated path fails closed rather than hanging on an absent human, and `open_file` is excluded from the offered tools (it would launch the OS GUI app, which is pointless unattended). For unattended use, configure `project_root` (boundary), `file_mutation_mode`/`git_mutation_mode` (`off` or `allow` per your trust), and `test_command` + the budget keys.
+In autopilot mode **no terminal confirmers are bound**, so every `confirm`-gated path fails closed rather than hanging on an absent human, and `open_file` is excluded from the offered tools (it would launch the OS GUI app, which is pointless unattended). A model-request timeout mid-step (e.g. the router taking longer than `ollama_timeout`) marks the run `blocked` with the timeout reason and is resumable — re-run the same goal to continue from that step. For unattended use, configure `project_root` (boundary), `file_mutation_mode`/`git_mutation_mode` (`off` or `allow` per your trust), and `test_command` + the budget keys.
 
 ### Testing
 ```bash
@@ -180,7 +181,7 @@ python main.py --autopilot "implement the missing unit tests for search_files"
 
 It plans the goal into steps, executes each through the tool loop, runs `test_command` between steps, and resumes if interrupted (add `--new-session` to start over).
 
-On startup, `main.py` pre-loads the router model into memory (with a visible progress message), so the first turn doesn't pay the ~30–45s cold-start load.
+On startup, `main.py` pre-loads the router model into memory (with a visible progress message), so the first turn doesn't pay the ~30–45s cold-start load; the coder model warms lazily on its first actual use, so read-only sessions don't pay its load cost. If a model call still times out, the CLI prints a hint pointing at the `ollama_timeout` setting (see the config table above).
 
 Then try:
 
@@ -191,11 +192,11 @@ Then try:
 - `find files named config in .`
 - `replace "could not reach" with "cannot reach" in main.py`  (deterministic edit)
 - `what's the git status?` / `show me the latest commits` / `diff the working tree`
-- `what can you do?`  (lists skills) / `what config are you using?`
+- `what can you do?`  (lists skills) / `what config are you using?` / `what's the current project root?`
 - `write a hello.py file that prints hello`  (router + coder model)
 - `why isn't this working?`  (delegates to the coder model)
 
-The list / open / read / search / find / git-status / git-log / git-diff / list-skills phrasings above are all **fast-path** matches: `main.py` recognizes them deterministically and calls the skill directly, skipping the router LLM entirely. Anything else falls through to the router.
+The list / open / read / search / find / git-status / git-log / git-diff / list-skills / project-root / config phrasings above are all **fast-path** matches: `main.py` recognizes them deterministically and calls the skill directly, skipping the router LLM entirely. Anything else falls through to the router.
 
 ## Current skills
 

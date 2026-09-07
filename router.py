@@ -25,8 +25,9 @@ SYSTEM_PROMPT = (
 )
 
 
-_WARMUP_TIMEOUT = 300  # generous: cold model load on CPU can exceed the 120s per-turn cap
+_WARMUP_TIMEOUT = 300  # generous: cold model load on CPU can exceed the default per-turn cap
 _DEFAULT_MAX_TOOL_ROUNDS = 4  # tool-calling rounds before forcing a final answer
+_DEFAULT_MODEL_TIMEOUT = 120  # seconds to wait for a model's first byte (chat calls)
 
 # Session-wide token accounting, used by the autopilot's budget. `_call_ollama`,
 # `plan_goal`, and the coder leaf (via coder.ask_coder) accumulate
@@ -49,15 +50,26 @@ def accumulate_tokens(data: dict) -> None:
     _SESSION_TOKENS += int(data.get("eval_count", 0) or 0) + int(data.get("prompt_eval_count", 0) or 0)
 
 
-def warm_up(config: dict) -> None:
-    """Pre-load the router model into RAM so the first turn isn't cold.
+def model_timeout(config: dict) -> int:
+    """Per-request timeout (seconds) for Ollama chat calls, from config.
 
-    Generation is capped at one token -- the cost here is dominated by the
-    model load, not by output. Raises requests.RequestException on failure;
-    callers report it (non-fatal: the first real turn would just be slow).
+    Bounds the time to wait for the first byte (model load + first token).
+    A missing or non-positive `ollama_timeout` falls back to the default.
+    """
+    value = int(config.get("ollama_timeout", _DEFAULT_MODEL_TIMEOUT) or 0)
+    return value if value > 0 else _DEFAULT_MODEL_TIMEOUT
+
+
+def warm_up(config: dict, model: str | None = None) -> None:
+    """Pre-load a model into RAM so its first turn isn't cold.
+
+    Defaults to the router model; pass `config["coder_model"]` to pre-load the
+    coder leaf too. Generation is capped at one token -- the cost here is
+    dominated by the model load, not by output. Raises requests.RequestException
+    on failure; callers report it (non-fatal: the first real turn is just slow).
     """
     payload = {
-        "model": config["router_model"],
+        "model": model or config["router_model"],
         "messages": [{"role": "user", "content": "ping"}],
         "stream": False,
         "options": {"temperature": 0.0, "num_predict": 1},
@@ -65,7 +77,7 @@ def warm_up(config: dict) -> None:
     resp = requests.post(
         f"{config['ollama_host']}/api/chat",
         json=payload,
-        timeout=_WARMUP_TIMEOUT,
+        timeout=max(_WARMUP_TIMEOUT, model_timeout(config)),
     )
     resp.raise_for_status()
 
@@ -83,7 +95,7 @@ def _call_ollama(config: dict, messages: list[dict], use_tools: bool = True) -> 
     resp = requests.post(
         f"{config['ollama_host']}/api/chat",
         json=payload,
-        timeout=120,
+        timeout=model_timeout(config),
     )
     resp.raise_for_status()
     data = resp.json()
@@ -224,7 +236,7 @@ def plan_goal(config: dict, goal: str) -> list[str]:
     resp = requests.post(
         f"{config['ollama_host']}/api/chat",
         json=payload,
-        timeout=120,
+        timeout=model_timeout(config),
     )
     resp.raise_for_status()
     data = resp.json()

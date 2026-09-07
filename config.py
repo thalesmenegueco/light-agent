@@ -23,6 +23,7 @@ DEFAULT_CONFIG = {
     "coder_model": "qwen2.5-coder:3b",
     "router_temperature": 0.2,
     "coder_temperature": 0.1,
+    "ollama_timeout": 120,        # seconds to wait for a model's first byte (chat calls)
     "max_history_messages": 12,   # keep the router's context small on limited hardware
     "max_tool_rounds": 4,        # tool-calling rounds per turn before forcing a final answer
     "log_level": "INFO",          # DEBUG / INFO / WARNING / ERROR for mini-agent.log

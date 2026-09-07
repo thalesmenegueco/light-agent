@@ -25,6 +25,8 @@ loop is fully testable offline (no Ollama, no subprocess).
 import logging
 import time
 
+import requests
+
 import router
 import session as session_mod
 from skills import verify_skills
@@ -48,6 +50,24 @@ def budget_exceeded(state: dict, config: dict, elapsed_seconds: float) -> str | 
     if max_tokens > 0 and state.get("tokens_used", 0) >= max_tokens:
         return f"token budget exceeded ({max_tokens})"
     return None
+
+
+def _model_error_reason(exc: Exception, config: dict) -> str:
+    """Human-readable blocked reason for a model request failure.
+
+    A read timeout is the common CPU-only case: Ollama took longer than
+    `ollama_timeout` to produce the first byte. Distinguish it from other
+    transport errors so the user knows which knob to turn.
+    """
+    if isinstance(exc, requests.exceptions.ReadTimeout):
+        seconds = int(config.get("ollama_timeout", 120) or 120)
+        return (
+            f"model request timed out after {seconds}s "
+            "(ollama_timeout); increase it and re-run the goal to resume from this step"
+        )
+    if isinstance(exc, requests.RequestException):
+        return f"model request failed: {exc}"
+    return f"step failed: {exc}"
 
 
 def _default_executor(config, history, prompt):
@@ -122,6 +142,14 @@ def run_autopilot(
     started_at = state.get("started_at") or clock()
     max_history = int(config.get("max_history_messages", 12))
 
+    def _blocked_from_error(exc: Exception) -> dict:
+        """Mark the run blocked (resumable) and persist, without crashing."""
+        state["status"] = "blocked"
+        state["blocked_reason"] = _model_error_reason(exc, config)
+        session_mod.save_session(state, session_path)
+        on_progress(f"Stopped: {state['blocked_reason']}.")
+        return state
+
     while state["current_step"] < len(state["plan"]):
         reason = budget_exceeded(state, config, clock() - started_at)
         if reason:
@@ -138,7 +166,10 @@ def run_autopilot(
         session_mod.save_session(state, session_path)
         on_progress(f"Step {idx + 1}/{total}: {step}")
 
-        reply, history = executor(config, history, step)
+        try:
+            reply, history = executor(config, history, step)
+        except requests.RequestException as exc:
+            return _blocked_from_error(exc)
         state["steps_used"] += 1
         state["tokens_used"] += router.get_token_count()
         router.reset_token_counter()
@@ -154,7 +185,10 @@ def run_autopilot(
                     on_progress(f"Verification unavailable: {result.get('error')}")
                     break
                 on_progress(f"Tests failed (exit {result.get('exit_code')}); fixing ({round_no + 1}/{verify_rounds})")
-                reply, history = executor(config, history, _fix_prompt(result))
+                try:
+                    reply, history = executor(config, history, _fix_prompt(result))
+                except requests.RequestException as exc:
+                    return _blocked_from_error(exc)
                 state["steps_used"] += 1
                 state["tokens_used"] += router.get_token_count()
                 router.reset_token_counter()

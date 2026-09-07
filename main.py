@@ -193,6 +193,27 @@ def _format_set_project_root(result: dict) -> str | None:
     return f"project_root set to {root!r}."
 
 
+def _format_project_root(result: dict) -> str | None:
+    if "error" in result:
+        return None
+    root = result.get("config", {}).get("project_root", "")
+    if root:
+        return f"The current project root is {root!r}."
+    return "No project root is set (path confinement is off)."
+
+
+def _format_get_config(result: dict) -> str | None:
+    if "error" in result:
+        return None
+    cfg = result.get("config", {})
+    if not cfg:
+        return "No configuration available."
+    lines = ["Current configuration:"]
+    for key in sorted(cfg):
+        lines.append(f"  {key}: {cfg[key]!r}")
+    return "\n".join(lines)
+
+
 _FAST_PATHS: list[FastPath] = [
     # "list files in <path>"
     FastPath(
@@ -249,6 +270,40 @@ _FAST_PATHS: list[FastPath] = [
         "set_config",
         _build_set_project_root_args,
         _format_set_project_root,
+    ),
+    # "what's the current project root?" / "show me the project root"
+    FastPath(
+        re.compile(
+            r"^(?:please\s+)?"
+            r"(?:"
+            r"what(?:'s| is)\s+(?:the\s+|my\s+|our\s+)?(?:current\s+)?project\s+root"
+            r"|(?:show|tell)\s+(?:me\s+)?(?:the\s+)?(?:current\s+)?project\s+root"
+            r"|which\s+(?:is\s+)?(?:the\s+)?project\s+root"
+            r"|what\s+project\s+root\s+(?:am\s+i|are\s+we)\s+using"
+            r")"
+            r"[?.!]?\s*$",
+            re.IGNORECASE,
+        ),
+        "get_config",
+        _build_no_args,
+        _format_project_root,
+    ),
+    # "what config are you using?" / "show me the config" / "get config"
+    FastPath(
+        re.compile(
+            r"^(?:please\s+)?"
+            r"(?:"
+            r"what(?:'s| is)\s+(?:the\s+|my\s+|your\s+)?(?:current\s+)?config(?:uration)?"
+            r"|(?:show|print|display)\s+(?:me\s+)?(?:the\s+|your\s+)?(?:current\s+)?config(?:uration)?"
+            r"|get\s+(?:the\s+)?config(?:uration)?"
+            r"|what\s+config(?:uration)?\s+(?:are|am)\s+(?:you|i)\s+using"
+            r")"
+            r"[?.!]?\s*$",
+            re.IGNORECASE,
+        ),
+        "get_config",
+        _build_no_args,
+        _format_get_config,
     ),
     # "git status" / "what's the git status?" / "what changed?" (optional "in <path>")
     FastPath(
@@ -363,6 +418,26 @@ def check_ollama(config: dict) -> bool:
     except Exception:
         logger.exception("Unexpected error during Ollama health check")
         return False
+
+
+def _ollama_timeout_hint(config: dict, exc: Exception) -> str | None:
+    """Return a helpful hint for a model read-timeout, or None otherwise.
+
+    A read timeout means Ollama accepted the request but took longer than the
+    configured timeout to produce the first byte (model load / generation) --
+    the most common cause on CPU-only hardware. Point the user at the knob.
+    """
+    if not isinstance(exc, requests.exceptions.ReadTimeout):
+        return None
+    seconds = int(config.get("ollama_timeout", 120) or 120)
+    suggested = max(seconds * 2, 240)
+    return (
+        "This Ollama error might be caused by a low timeout value "
+        "(the time the model takes before producing its first byte). "
+        f"The timeout is currently set to {seconds * 1000} ms. "
+        f"Do you want to increase the timeout value? "
+        f"(e.g. 'set ollama_timeout to {suggested}', or edit config.json)"
+    )
 
 
 def _parse_args(argv=None):
@@ -500,6 +575,9 @@ def main() -> None:
         except requests.RequestException as exc:
             logger.error("Ollama request failed: %s", exc)
             print(f"[Ollama error] Could not reach the model: {exc}", file=sys.stderr)
+            hint = _ollama_timeout_hint(config, exc)
+            if hint:
+                print(hint, file=sys.stderr)
             continue
         except Exception:
             logger.exception("Unhandled error while processing: %r", user_message)

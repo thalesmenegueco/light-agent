@@ -17,6 +17,8 @@ from pathlib import Path
 # Make the project root importable regardless of how unittest is invoked.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import requests
+
 import autopilot
 import router
 from config import DEFAULT_CONFIG
@@ -56,6 +58,24 @@ class RecordingExecutor:
             {"role": "assistant", "content": reply},
         ]
         return reply, history
+
+
+class FlakyExecutor:
+    """Raises a model error on the first call, then behaves normally."""
+
+    def __init__(self, exc):
+        self.exc = exc
+        self.calls = 0
+
+    def __call__(self, config, history, prompt):
+        self.calls += 1
+        if self.calls == 1:
+            raise self.exc
+        history = list(history) + [
+            {"role": "user", "content": prompt},
+            {"role": "assistant", "content": "ok"},
+        ]
+        return "ok", history
 
 
 class TestBudget(unittest.TestCase):
@@ -207,6 +227,47 @@ class TestRunAutopilot(unittest.TestCase):
             self.assertEqual(state["status"], "done")
             self.assertEqual(state["current_step"], 2)
             self.assertEqual([s["step"] for s in state["plan"]], ["x", "y"])
+
+    def test_model_timeout_blocks_and_resumes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            sp = Path(tmp) / "session.json"
+            executor = FlakyExecutor(requests.exceptions.ReadTimeout("Read timed out."))
+            # First run: step 1 times out -> blocked, step not advanced.
+            first = autopilot.run_autopilot(
+                _config(), "goal", session_path=sp,
+                planner=_planner(["a", "b"]), executor=executor, test_runner=_passing_tests,
+            )
+            self.assertEqual(first["status"], "blocked")
+            self.assertIn("timed out", first["blocked_reason"])
+            self.assertEqual(first["current_step"], 0)
+            self.assertEqual(first["steps_used"], 0)
+            # Resume (same goal): the executor now succeeds for both steps.
+            second = autopilot.run_autopilot(
+                _config(), "goal", session_path=sp,
+                planner=_planner(["a", "b"]), executor=executor, test_runner=_passing_tests,
+            )
+            self.assertEqual(second["status"], "done")
+            self.assertEqual(second["current_step"], 2)
+            self.assertEqual(second["steps_used"], 2)
+
+    def test_model_connection_error_blocks(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            sp = Path(tmp) / "session.json"
+            executor = FlakyExecutor(requests.exceptions.ConnectionError("boom"))
+            state = autopilot.run_autopilot(
+                _config(), "goal", session_path=sp,
+                planner=_planner(["a"]), executor=executor, test_runner=_passing_tests,
+            )
+            self.assertEqual(state["status"], "blocked")
+            self.assertIn("model request failed", state["blocked_reason"])
+
+    def test_model_error_reason_distinguishes_timeout(self):
+        self.assertIn("timed out", autopilot._model_error_reason(
+            requests.exceptions.ReadTimeout("x"), _config()))
+        self.assertIn("ollama_timeout", autopilot._model_error_reason(
+            requests.exceptions.ReadTimeout("x"), _config()))
+        self.assertIn("model request failed", autopilot._model_error_reason(
+            requests.exceptions.ConnectionError("x"), _config()))
 
 
 if __name__ == "__main__":

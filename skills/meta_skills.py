@@ -14,7 +14,7 @@ from platform_utils import set_project_root
 
 _CONFIG = None
 
-_INT_KEYS = {"max_history_messages", "max_tool_rounds", "run_command_timeout", "run_command_max_output", "test_timeout", "test_max_output"}
+_INT_KEYS = {"max_history_messages", "max_tool_rounds", "ollama_timeout", "run_command_timeout", "run_command_max_output", "test_timeout", "test_max_output"}
 # Session/budget keys allow 0 (meaning "unlimited").
 _NONNEG_INT_KEYS = {"max_session_steps", "session_timeout_seconds", "max_session_tokens", "verify_rounds"}
 _NUM_KEYS = {"router_temperature", "coder_temperature"}
@@ -141,7 +141,8 @@ SCHEMAS = [
                     "Update one or more configuration values and persist them to disk. "
                     "Known keys: ollama_host, router_model, coder_model, "
                     "router_temperature, coder_temperature, max_history_messages, "
-                    "max_tool_rounds, log_level, log_file, project_root (the directory "
+                    "max_tool_rounds, ollama_timeout (seconds before a model call times "
+                    "out), log_level, log_file, project_root (the directory "
                     "the agent is allowed to read/write within), file_mutation_mode "
                     "(off/confirm/allow), git_mutation_mode (off/confirm/allow), and "
                     "run_command_* safety settings. Use this to "
