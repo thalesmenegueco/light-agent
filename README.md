@@ -20,10 +20,12 @@ Both via Ollama's `/api/chat`. CPU-only inference (~5–6 tok/s) — tokens-per-
 ### File structure (current)
 ```
 light-agent/
-├── main.py              # CLI entry: argparse (--run-command-mode), warm-up, fast-path, loop, history trim, errors
+├── main.py              # CLI entry: argparse (--run-command-mode/--autopilot), warm-up, fast-path, loop, history trim, errors
 ├── config.py            # cross-platform config, JSON-persisted (DEFAULT_CONFIG + save/load)
-├── router.py            # recursive tool-calling loop + warm_up(config)
+├── router.py            # recursive tool-calling loop + warm_up + plan_goal (planner) + token accounting
 ├── coder.py             # thin wrapper around qwen2.5-coder:3b (leaf)
+├── autopilot.py         # unattended planner/executor loop: plan -> execute steps -> verify, with budget + resume
+├── session.py           # durable session state (goal/plan/progress/budget/history) -> session.json
 ├── platform_utils.py    # OS dispatch (open_path) + path confinement (normalize_path/confined_path/set_project_root)
 ├── logging_setup.py     # rotating file logging → logs/mini-agent.log (1 MB × 3)
 ├── demo.py              # offline showcase (no Ollama)
@@ -32,20 +34,25 @@ light-agent/
 │   ├── __init__.py      # registry: auto-discovers SCHEMAS → TOOLS[] + DISPATCH{}; init_skills(config)
 │   ├── fs_skills.py     # list/read/write/append/move/replace_in_file/open_file (+ file-mutation gate)
 │   ├── search_skills.py # search_files (name/content/both; results sorted)
-│   ├── git_skills.py    # git_status/diff/log (read-only)
+│   ├── git_skills.py    # git_status/diff/log (read-only) + git_commit/checkpoint/rollback (gated)
 │   ├── code_skills.py   # run_coder → coder leaf (bind_config)
 │   ├── meta_skills.py   # list_skills/get_config/set_config (validates + persists)
-│   └── run_command_skills.py  # run_command (deny-by-default safety policy)
-├── tests/               # 134 tests (offline, no Ollama)
+│   ├── run_command_skills.py  # run_command (deny-by-default safety policy)
+│   └── verify_skills.py # run_tests (runs the config-side test_command; verification loop)
+├── tests/               # 172 tests (offline, no Ollama)
 │   ├── test_skills.py             # registry + fs/search + fast path
 │   ├── test_git_skills.py         # read-only git (+ git fast paths)
+│   ├── test_git_mutation_policy.py # git commit/checkpoint/rollback gate
 │   ├── test_meta_skills.py        # meta skills + set_config re-apply + in-place config
 │   ├── test_logging.py            # logging setup
 │   ├── test_run_command.py        # run_command policy (scripted confirmer)
 │   ├── test_run_command_cli.py    # live-terminal subprocess test (real stdin)
 │   ├── test_router.py             # warm_up + recursive tool loop
 │   ├── test_path_confinement.py   # path confinement
-│   └── test_file_mutation_policy.py  # file mutation gate
+│   ├── test_file_mutation_policy.py  # file mutation gate
+│   ├── test_verify_skills.py      # run_tests verification skill
+│   ├── test_session.py            # session-state persistence
+│   └── test_autopilot.py          # budget + planner parsing + resume loop
 ├── logs/                # mini-agent.log (.gitkeep, gitignored)
 ├── assets/              # (empty, reserved for packaging assets)
 ├── .gitignore
@@ -54,7 +61,7 @@ light-agent/
 ```
 
 ### Skill contract
-Each skill module exposes `SCHEMAS = [(schema_dict, function), ...]`; `skills/__init__.py` auto-registers them into `TOOLS` (the OpenAI-style function schemas sent to the router) and `DISPATCH` (`{name: function}`). **Adding a skill = new file + one import in `skills/__init__.py`; `router.py` never changes.** Some skills need config or a confirmer, injected at startup via `bind_config()` / `bind_confirmer()` / `bind_file_confirmer()` (see [Startup flow](#startup-flow)).
+Each skill module exposes `SCHEMAS = [(schema_dict, function), ...]`; `skills/__init__.py` auto-registers them into `TOOLS` (the OpenAI-style function schemas sent to the router) and `DISPATCH` (`{name: function}`). **Adding a skill = new file + one import in `skills/__init__.py`; `router.py` never changes.** Some skills need config or a confirmer, injected at startup via `bind_config()` / `bind_confirmer()` / `bind_file_confirmer()` / `bind_git_confirmer()` (see [Startup flow](#startup-flow)).
 
 ### Configuration (every key in `DEFAULT_CONFIG`)
 | Key | Default | Meaning |
@@ -70,6 +77,7 @@ Each skill module exposes `SCHEMAS = [(schema_dict, function), ...]`; `skills/__
 | `log_file` | `""` | `""` = `<app_dir>/logs/mini-agent.log` |
 | `project_root` | `""` | path-confinement root; `""` = no confinement |
 | `file_mutation_mode` | `allow` | `off` / `confirm` / `allow` for write/append/move/replace |
+| `git_mutation_mode` | `off` | `off` / `confirm` / `allow` for commit/checkpoint/rollback |
 | `run_command_mode` | `off` | `off` / `confirm` / `allowlist` / `auto` |
 | `run_command_allowlist` | `[]` | programs allowed without confirmation |
 | `run_command_denylist` | `[]` | extra refusal literals (merged with built-ins) |
@@ -78,25 +86,46 @@ Each skill module exposes `SCHEMAS = [(schema_dict, function), ...]`; `skills/__
 | `run_command_cwd` | `""` | `""` = inherit; else fixed working dir |
 | `run_command_shell` | `false` | allow shell operators at all |
 | `run_command_allow_network` | `false` | allow network-touching programs |
+| `test_command` | `""` | command `run_tests` runs (config-side only; `""` = verification disabled) |
+| `test_timeout` | `120` | seconds before a test run is killed |
+| `test_max_output` | `8000` | chars, per stdout/stderr |
+| `max_session_steps` | `0` | `0` = unlimited; cap autonomous steps per run |
+| `session_timeout_seconds` | `0` | `0` = unlimited; wall-clock cap for a whole run |
+| `max_session_tokens` | `0` | `0` = unlimited; router token cap per run |
+| `verify_rounds` | `2` | max fix iterations per step when tests fail |
 
 Config lives at `%APPDATA%\MiniAgent\config.json` (Windows) / `~/.config/mini-agent/config.json` (Linux). `set_config` validates against these keys and persists; `project_root` is re-applied live (all other consumers read keys lazily).
 
-### Safety layers (three, complementary)
+### Safety layers (four, complementary)
 1. **`run_command`** — deny-by-default local command execution (off by default; see below).
 2. **`project_root`** — path confinement for every file/git/search skill and `run_command`'s cwd (off by default).
 3. **`file_mutation_mode`** — gates `write/append/move/replace` (`allow` by default; `confirm`/`off` for unattended).
+4. **`git_mutation_mode`** — gates `git_commit/git_checkpoint/git_rollback` (`off` by default; the mutating git skills ship disabled).
+
+`run_tests` adds a fifth, differently-shaped safety property: it runs only the human-configured `test_command`, never a model-supplied command, so the verification loop can run unattended without re-opening arbitrary execution.
 
 ### Startup flow / CLI
-`python main.py` → load config → `init_skills(config)` (binds config to coder/meta/run_command/fs + sets `project_root`) → bind the two terminal confirmers → setup logging → Ollama health check (exit if unreachable) → **warm-up** (a `num_predict:1` chat call so the first turn doesn't hit the ~30–45s cold load; non-fatal) → ready banner → input loop.
+`python main.py` → load config → `init_skills(config)` (binds config to coder/meta/run_command/fs/git/verify + sets `project_root`) → bind the three terminal confirmers (run_command / file-mutation / git-mutation) → setup logging → Ollama health check (exit if unreachable) → **warm-up** (a `num_predict:1` chat call so the first turn doesn't hit the ~30–45s cold load; non-fatal) → ready banner → input loop.
 
 - Flag `--run-command-mode {off,confirm,allowlist,auto}` is a session-only (non-persisted) override; a startup hint prints when `run_command_mode` ≠ `off` or `file_mutation_mode` ≠ `allow`.
 - **Fast path** (`_FAST_PATHS` in `main.py`) short-circuits ~9 deterministic phrasings (list/open/read/cat/search/find/git-status/git-log/git-diff/list-skills/set-project-root) straight to the skill, skipping the router; anything unmatched (or whose skill errors) falls through to the router.
 - The router's tool loop is **recursive** (multi-round), bounded by `max_tool_rounds`; intermediate tool messages never enter the persisted history.
 
+### Autopilot (unattended)
+`python main.py --autopilot "<goal>"` runs the **planner → executor** loop with no input prompt:
+
+1. **plan** — `router.plan_goal(goal)` asks the router (JSON mode) to break the goal into an ordered list of steps.
+2. **execute** — each step runs through the normal tool-calling loop (`router.handle_message`), so the coder leaf and every deterministic skill are available.
+3. **verify** — when `test_command` is set, `run_tests` runs after each step and failures are fed back to the executor up to `verify_rounds` times (the code → test → fix loop).
+4. **budget** — before every step, `max_session_steps` / `session_timeout_seconds` / `max_session_tokens` are checked; hitting any of them stops the run and marks it `blocked`.
+5. **persist/resume** — progress (goal, plan, step status, budget counters, compact history) is written to `session.json` after every step, so a crashed run resumes from the last completed step. Re-run the same `--autopilot "<goal>"` to resume; `--new-session` discards saved state and starts fresh.
+
+In autopilot mode **no terminal confirmers are bound**, so every `confirm`-gated path fails closed rather than hanging on an absent human. For unattended use, configure `project_root` (boundary), `file_mutation_mode`/`git_mutation_mode` (`off` or `allow` per your trust), and `test_command` + the budget keys.
+
 ### Testing
 ```bash
-python3 -m unittest   # 134 tests pass, offline, no Ollama (~2.4 s)
-python3 demo.py       # offline showcase, reports 16 tools
+python3 -m unittest   # 172 tests pass, offline, no Ollama (~4 s)
+python3 demo.py       # offline showcase, reports 20 tools
 ```
 `tests/test_run_command_cli.py` drives the real `terminal_confirmer` through a real subprocess with real stdin (the only test that touches a live terminal). Everything else uses scripted/mocked confirmers and `requests`.
 
@@ -104,9 +133,10 @@ python3 demo.py       # offline showcase, reports 16 tools
 - Fast path is a fixed phrase table (extend via a `FastPath` entry); the tool loop is recursive but capped at `max_tool_rounds`.
 - `run_command` "always allow" persists to the allowlist but only auto-runs in `allowlist`/`auto` modes.
 - **`run_command` argv-level path confinement is not implemented** — only the `cwd` is confined; command *content* (e.g. `cat /etc/passwd`) stays governed by the deny/allow model.
-- Natural next skills: `copy_file`, `delete_file`/`move_to_trash`, `file_info`, `tree`, `count_lines`, `diff_files`, `fetch_url` (network, opt-in).
+- The session token budget counts the **router** model only (eval + prompt-eval per call); the coder leaf's tokens aren't tallied yet.
+- Resume is "at-least-once": a step marked `in_progress` when a crash lands may re-run on resume.
+- Natural next skills: `copy_file`, `delete_file`/`move_to_trash`, `file_info`, `tree`, `count_lines`, `diff_files`, `fetch_url` (network, opt-in). Mutating/network ones must land behind the same gating as the existing policies.
 - Phase 5 = PyInstaller packaging + cross-platform testing (`sys.frozen`/`sys.executable`).
-- Unattended "autopilot" still needs: a verification loop (run tests + feed failures back to the coder), git checkpoint/rollback, plan/persistence/resume, a session budget (steps/time/tokens), and a planner-vs-executor separation.
 
 ## Try it now
 
@@ -138,6 +168,14 @@ python main.py
 ```
 
 To enable the off-by-default `run_command` skill with per-command confirmation, start with `python main.py --run-command-mode confirm`.
+
+To run unattended, set a project root and a test command first, then:
+
+```bash
+python main.py --autopilot "implement the missing unit tests for search_files"
+```
+
+It plans the goal into steps, executes each through the tool loop, runs `test_command` between steps, and resumes if interrupted (add `--new-session` to start over).
 
 On startup, `main.py` pre-loads the router model into memory (with a visible progress message), so the first turn doesn't pay the ~30–45s cold-start load.
 
@@ -171,11 +209,15 @@ The list / open / read / search / find / git-status / git-log / git-diff / list-
 | `git_status` | deterministic (read-only) | Show branch + working-tree status |
 | `git_diff` | deterministic (read-only) | Unified diff of working-tree / staged changes |
 | `git_log` | deterministic (read-only) | Recent commit history, one line per commit |
+| `git_commit` | deterministic (gated) | Commit changes (tracked + untracked) — `git_mutation_mode` |
+| `git_checkpoint` | deterministic (gated) | Snapshot the working tree as a commit; returns its hash |
+| `git_rollback` | deterministic (gated) | Discard all changes since a checkpoint (`reset --hard` + `clean`) |
 | `list_skills` | deterministic | List every available tool with its description |
 | `get_config` | deterministic | Read the current runtime config |
 | `set_config` | deterministic | Validate, apply, and persist config changes |
 | `run_coder` | LLM (coder leaf) | Write / review / debug code via `qwen2.5-coder:3b` |
 | `run_command` | deterministic (gated) | Run a local command under a deny-by-default safety policy (off by default) |
+| `run_tests` | deterministic (config-side) | Run the pre-configured `test_command`; reports pass/fail for the verification loop |
 
 ### `run_command` safety model
 
@@ -214,6 +256,24 @@ The mutating filesystem skills (`write_file`, `append_file`, `move_file`, `repla
 ```
 
 For unattended/autopilot use, set `file_mutation_mode` to `off` (read-only) or `confirm` (only works with a human at the terminal), and rely on `project_root` as the boundary when you do allow writes. `open_file` and the read-only skills are unaffected.
+
+### Git mutation policy (checkpoint / rollback)
+
+The mutating git skills (`git_commit`, `git_checkpoint`, `git_rollback`) ship **disabled** (`git_mutation_mode: "off"`) and are gated the same way as file mutations:
+
+- `off` (default) — all three refuse; the agent stays read-only on git.
+- `confirm` — prompts for confirmation; **fails closed** if no confirmer is bound.
+- `allow` — run without prompting.
+
+```json
+{ "git_mutation_mode": "allow" }
+```
+
+`git_checkpoint` snapshots the whole working tree as a commit (tracked + untracked) and returns its hash; `git_rollback <hash>` returns to that commit via `reset --hard` + `clean -fd`. Together they give an autopilot a revert point before a multi-step change. Enable them (`allow`) when you trust the boundary set by `project_root`, and checkpoint before each batch of autonomous edits.
+
+### Verification loop (`run_tests`)
+
+Set `test_command` to the suite you want the agent to run (e.g. `python -m unittest`, `pytest -q`), and `run_tests` executes exactly that command — never a model-supplied one — with `shell=False`, inside `project_root`, bounded by `test_timeout`/`test_max_output`. It reports a structured `{passed, exit_code, stdout, stderr}` result. In the autopilot, failures are fed back to the executor up to `verify_rounds` times, closing the code → test → fix loop without re-opening arbitrary command execution.
 
 ## Phase 0 — Foundations (before any agent logic)
 
@@ -308,7 +368,7 @@ Use them to *write and debug* the modules above — e.g. have Kilo Code (backed 
 
 ## Router model notes
 
-The registry wiring is verified end-to-end (imports run, `init_skills` binds config to the coder skill, all 16 tools auto-register), and the full router loop has been tested against live Ollama.
+The registry wiring is verified end-to-end (imports run, `init_skills` binds config to the coder skill, all 20 tools auto-register), and the full router loop has been tested against live Ollama.
 
 The original plan used `phi4-mini` as the router. Tested live, it **does not emit structured tool calls**: it returns the call as raw text in `content` (e.g. `<|tool_call|>>{"files": ["README.md", ...]}`) with no `message.tool_calls` field, and it hallucinates the result. `router.py` relies on `message.get("tool_calls")`, so that silently fails and the agent returns garbage text.
 
