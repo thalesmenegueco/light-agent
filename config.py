@@ -46,6 +46,11 @@ DEFAULT_CONFIG = {
     "test_command": "",                  # command run by run_tests (config-side only)
     "test_timeout": 120,                 # seconds before a test run is killed
     "test_max_output": 8000,             # chars, per stdout/stderr
+    # autopilot / unattended session controls (0 = unlimited)
+    "max_session_steps": 0,              # cap autonomous executor steps per run
+    "session_timeout_seconds": 0,        # wall-clock cap for a whole run
+    "max_session_tokens": 0,             # router token cap for a whole run
+    "verify_rounds": 2,                  # max fix iterations per step when tests fail
 }
 
 

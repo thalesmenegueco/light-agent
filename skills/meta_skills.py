@@ -15,6 +15,8 @@ from platform_utils import set_project_root
 _CONFIG = None
 
 _INT_KEYS = {"max_history_messages", "max_tool_rounds", "run_command_timeout", "run_command_max_output", "test_timeout", "test_max_output"}
+# Session/budget keys allow 0 (meaning "unlimited").
+_NONNEG_INT_KEYS = {"max_session_steps", "session_timeout_seconds", "max_session_tokens", "verify_rounds"}
 _NUM_KEYS = {"router_temperature", "coder_temperature"}
 _STR_KEYS = {"ollama_host", "router_model", "coder_model", "log_file", "run_command_cwd", "project_root", "test_command"}
 _LOG_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR"}
@@ -65,6 +67,10 @@ def set_config(updates: dict) -> dict:
         value = updates[key]
         if isinstance(value, bool) or not isinstance(value, int) or value < 1:
             return {"error": f"{key} must be a positive integer"}
+    for key in _NONNEG_INT_KEYS & set(updates):
+        value = updates[key]
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            return {"error": f"{key} must be a non-negative integer"}
     for key in _NUM_KEYS & set(updates):
         value = updates[key]
         if isinstance(value, bool) or not isinstance(value, (int, float)):

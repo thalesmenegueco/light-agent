@@ -377,7 +377,35 @@ def _parse_args(argv=None):
         default=None,
         help="Override run_command_mode for this session only (does not persist to config).",
     )
+    parser.add_argument(
+        "--autopilot",
+        metavar="GOAL",
+        default=None,
+        help="Run unattended: plan GOAL into steps and execute them, with a session budget and resume.",
+    )
+    parser.add_argument(
+        "--new-session",
+        action="store_true",
+        help="Discard any saved session state before --autopilot (start fresh).",
+    )
     return parser.parse_args(argv)
+
+
+def _run_autopilot(config: dict, goal: str, new_session: bool) -> None:
+    """Run the unattended planner/executor loop and print a summary."""
+    import autopilot
+    from session import clear_session
+
+    if new_session:
+        clear_session()
+    state = autopilot.run_autopilot(config, goal, on_progress=print)
+    print()
+    print("--- autopilot summary ---")
+    print(f"goal   : {state['goal']}")
+    print(f"status : {state['status']}")
+    print(f"steps used: {state['steps_used']} | tokens used: {state['tokens_used']}")
+    if state.get("blocked_reason"):
+        print(f"blocked: {state['blocked_reason']}")
 
 
 def main() -> None:
@@ -386,13 +414,16 @@ def main() -> None:
     if args.run_command_mode:
         config["run_command_mode"] = args.run_command_mode
     init_skills(config)
-    # Bind the interactive confirmation prompt for run_command. It stays inert
-    # while run_command_mode is "off" (the default); the user opts in via config.
-    run_command_skills.bind_confirmer(run_command_skills.terminal_confirmer)
-    # Same for file mutations: inert unless file_mutation_mode is "confirm".
-    fs_skills.bind_file_confirmer(fs_skills.terminal_file_confirmer)
-    # Same for git mutations: inert unless git_mutation_mode is "confirm".
-    git_skills.bind_git_confirmer(git_skills.terminal_git_confirmer)
+    if not args.autopilot:
+        # Bind the interactive confirmation prompt for run_command. It stays inert
+        # while run_command_mode is "off" (the default); the user opts in via config.
+        # In autopilot mode we deliberately bind NOTHING, so every confirm-gated
+        # path fails closed instead of hanging on an absent terminal.
+        run_command_skills.bind_confirmer(run_command_skills.terminal_confirmer)
+        # Same for file mutations: inert unless file_mutation_mode is "confirm".
+        fs_skills.bind_file_confirmer(fs_skills.terminal_file_confirmer)
+        # Same for git mutations: inert unless git_mutation_mode is "confirm".
+        git_skills.bind_git_confirmer(git_skills.terminal_git_confirmer)
 
     log_file = setup_logging(config)
     if args.run_command_mode:
@@ -433,6 +464,11 @@ def main() -> None:
         print("[file_mutation] mode: off — write/append/replace/move are disabled.\n")
     elif fm_mode == "confirm":
         print("[file_mutation] mode: confirm — file edits will prompt for confirmation.\n")
+
+    if args.autopilot:
+        # Unattended: any confirm-gated path will fail closed (no confirmer bound).
+        _run_autopilot(config, args.autopilot, args.new_session)
+        return
 
     history: list[dict] = []
 

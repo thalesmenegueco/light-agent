@@ -28,6 +28,25 @@ SYSTEM_PROMPT = (
 _WARMUP_TIMEOUT = 300  # generous: cold model load on CPU can exceed the 120s per-turn cap
 _DEFAULT_MAX_TOOL_ROUNDS = 4  # tool-calling rounds before forcing a final answer
 
+# Session-wide token accounting, used by the autopilot's budget. `_call_ollama`
+# and `plan_goal` accumulate `eval_count` + `prompt_eval_count` here; the
+# autopilot resets/reads it between steps so a token cap can bound a whole run.
+_SESSION_TOKENS = 0
+
+
+def reset_token_counter() -> None:
+    global _SESSION_TOKENS
+    _SESSION_TOKENS = 0
+
+
+def get_token_count() -> int:
+    return _SESSION_TOKENS
+
+
+def _accumulate_tokens(data: dict) -> None:
+    global _SESSION_TOKENS
+    _SESSION_TOKENS += int(data.get("eval_count", 0) or 0) + int(data.get("prompt_eval_count", 0) or 0)
+
 
 def warm_up(config: dict) -> None:
     """Pre-load the router model into RAM so the first turn isn't cold.
@@ -66,7 +85,9 @@ def _call_ollama(config: dict, messages: list[dict], use_tools: bool = True) -> 
         timeout=120,
     )
     resp.raise_for_status()
-    return resp.json()
+    data = resp.json()
+    _accumulate_tokens(data)
+    return data
 
 
 def _parse_tool_args(raw_args) -> dict:
@@ -151,3 +172,61 @@ def handle_message(config: dict, history: list[dict], user_message: str) -> tupl
     history.append({"role": "user", "content": user_message})
     history.append({"role": "assistant", "content": reply})
     return reply, history
+
+
+_PLAN_SYSTEM = (
+    "You are a planning assistant. Break the user's goal into a short ordered "
+    "list of concrete, small steps, each of which can be accomplished with local "
+    "filesystem, git, search, or code tools. Respond with ONLY a JSON array of "
+    "strings -- no commentary, no markdown fences."
+)
+
+
+def _parse_plan(content: str) -> list[str]:
+    """Parse a planner response into a list of step strings (never raises)."""
+    text = (content or "").strip()
+    if not text:
+        return []
+    # Tolerate markdown fences the model sometimes emits despite instructions.
+    if text.startswith("```"):
+        text = text.strip("`")
+        text = text.removeprefix("json").strip()
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        logger.warning("Planner returned non-JSON; treating as a single step: %r", text[:200])
+        return [text]
+    if isinstance(parsed, list):
+        return [str(step).strip() for step in parsed if str(step).strip()]
+    if isinstance(parsed, dict) and isinstance(parsed.get("steps"), list):
+        return [str(step).strip() for step in parsed["steps"] if str(step).strip()]
+    return [text]
+
+
+def plan_goal(config: dict, goal: str) -> list[str]:
+    """Break a goal into an ordered list of steps via the router model.
+
+    Uses JSON-mode output and counts the call against the session token budget.
+    Raises requests.RequestException on transport failure; callers decide how
+    to degrade (e.g. fall back to a single-step plan).
+    """
+    payload = {
+        "model": config["router_model"],
+        "messages": [
+            {"role": "system", "content": _PLAN_SYSTEM},
+            {"role": "user", "content": goal},
+        ],
+        "stream": False,
+        "format": "json",
+        "options": {"temperature": config.get("router_temperature", 0.2)},
+    }
+    resp = requests.post(
+        f"{config['ollama_host']}/api/chat",
+        json=payload,
+        timeout=120,
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    _accumulate_tokens(data)
+    steps = _parse_plan(data.get("message", {}).get("content", ""))
+    return steps or [goal.strip()]
