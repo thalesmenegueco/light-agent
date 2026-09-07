@@ -77,7 +77,7 @@ Each skill module exposes `SCHEMAS = [(schema_dict, function), ...]`; `skills/__
 | `max_history_messages` | `12` | conversation context window (read per-turn) |
 | `max_tool_rounds` | `4` | tool-calling rounds before forcing a final answer |
 | `log_level` | `INFO` | `DEBUG`/`INFO`/`WARNING`/`ERROR` |
-| `log_file` | `""` | `""` = `<app_dir>/logs/mini-agent.log` |
+| `log_file` | `""` | `""` = `<app_dir>/logs/mini-agent.log` (`<base_dir>/logs/` when frozen) |
 | `project_root` | `""` | path-confinement root; `""` = no confinement |
 | `file_mutation_mode` | `allow` | `off` / `confirm` / `allow` for write/append/move/replace |
 | `git_mutation_mode` | `off` | `off` / `confirm` / `allow` for commit/checkpoint/rollback |
@@ -86,7 +86,7 @@ Each skill module exposes `SCHEMAS = [(schema_dict, function), ...]`; `skills/__
 | `run_command_denylist` | `[]` | extra refusal literals (merged with built-ins) |
 | `run_command_timeout` | `30` | seconds before a command is killed |
 | `run_command_max_output` | `8000` | chars, per stdout/stderr |
-| `run_command_cwd` | `""` | `""` = inherit; else fixed working dir |
+| `run_command_cwd` | `""` | `""` = inherit (or `project_root` when set); else fixed working dir |
 | `run_command_shell` | `false` | allow shell operators at all |
 | `run_command_allow_network` | `false` | allow network-touching programs |
 | `test_command` | `""` | command `run_tests` runs (config-side only; `""` = verification disabled) |
@@ -101,7 +101,7 @@ Config lives at `%APPDATA%\MiniAgent\config.json` (Windows) / `~/.config/mini-ag
 
 ### Safety layers (four, complementary)
 1. **`run_command`** — deny-by-default local command execution (off by default; see below).
-2. **`project_root`** — path confinement for every file/git/search skill and `run_command`'s cwd (off by default).
+2. **`project_root`** — path confinement for every file/git/search skill and `run_command`'s cwd + argument paths (off by default).
 3. **`file_mutation_mode`** — gates `write/append/move/replace` (`allow` by default; `confirm`/`off` for unattended).
 4. **`git_mutation_mode`** — gates `git_commit/git_checkpoint/git_rollback` (`off` by default; the mutating git skills ship disabled).
 
@@ -121,7 +121,7 @@ Config lives at `%APPDATA%\MiniAgent\config.json` (Windows) / `~/.config/mini-ag
 2. **execute** — each step runs through the normal tool-calling loop (`router.handle_message`), so the coder leaf and every deterministic skill are available.
 3. **verify** — when `test_command` is set, `run_tests` runs after each step and failures are fed back to the executor up to `verify_rounds` times (the code → test → fix loop).
 4. **budget** — before every step, `max_session_steps` / `session_timeout_seconds` / `max_session_tokens` are checked; hitting any of them stops the run and marks it `blocked`.
-5. **persist/resume** — progress (goal, plan, step status, budget counters, compact history) is written to `session.json` after every step, so a crashed run resumes from the last completed step. Re-run the same `--autopilot "<goal>"` to resume; `--new-session` discards saved state and starts fresh.
+5. **persist/resume** — progress (goal, plan, step status, budget counters, compact history) is written to `session.json` in the config dir (`~/.config/mini-agent/` / `%APPDATA%\MiniAgent\`) after every step, so a crashed run resumes from the last completed step. Re-run the same `--autopilot "<goal>"` to resume; `--new-session` discards saved state and starts fresh.
 
 In autopilot mode **no terminal confirmers are bound**, so every `confirm`-gated path fails closed rather than hanging on an absent human. For unattended use, configure `project_root` (boundary), `file_mutation_mode`/`git_mutation_mode` (`off` or `allow` per your trust), and `test_command` + the budget keys.
 
