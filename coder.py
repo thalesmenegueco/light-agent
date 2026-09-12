@@ -38,7 +38,7 @@ def ask_coder(config: dict, instruction: str, file_content: str | None = None) -
     # Lazy import to avoid a circular import (router -> skills -> code_skills
     # -> coder). The helpers are only needed at call time, when router is
     # fully loaded.
-    from router import accumulate_tokens, model_timeout, warm_up
+    from router import accumulate_tokens, model_timeout, read_streamed_response, warm_up
 
     if not _WARMED:
         _WARMED = True
@@ -57,17 +57,18 @@ def ask_coder(config: dict, instruction: str, file_content: str | None = None) -
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": "\n".join(prompt_parts)},
         ],
-        "stream": False,
+        "stream": True,
         "options": {"temperature": config.get("coder_temperature", 0.1)},
     }
 
     resp = requests.post(
         f"{config['ollama_host']}/api/chat",
         json=payload,
+        stream=True,
         timeout=model_timeout(config),
     )
     resp.raise_for_status()
-    data = resp.json()
+    data = read_streamed_response(resp)
     # Accumulate the coder's tokens into the session budget so an autopilot's
     # token cap bounds the WHOLE run, not just the router.
     accumulate_tokens(data)

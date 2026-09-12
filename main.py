@@ -424,16 +424,17 @@ def _ollama_timeout_hint(config: dict, exc: Exception) -> str | None:
     """Return a helpful hint for a model read-timeout, or None otherwise.
 
     A read timeout means Ollama accepted the request but took longer than the
-    configured timeout to produce the first byte (model load / generation) --
-    the most common cause on CPU-only hardware. Point the user at the knob.
+    configured timeout to produce the first streamed chunk (model load +
+    prompt evaluation) -- the most common cause on CPU-only hardware. Point the
+    user at the knob.
     """
     if not isinstance(exc, requests.exceptions.ReadTimeout):
         return None
-    seconds = int(config.get("ollama_timeout", 120) or 120)
+    seconds = int(config.get("ollama_timeout", 300) or 300)
     suggested = max(seconds * 2, 240)
     return (
         "This Ollama error might be caused by a low timeout value "
-        "(the time the model takes before producing its first byte). "
+        "(the time the model takes before producing its first chunk). "
         f"The timeout is currently set to {seconds * 1000} ms. "
         f"Do you want to increase the timeout value? "
         f"(e.g. 'set ollama_timeout to {suggested}', or edit config.json)"

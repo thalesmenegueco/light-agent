@@ -15,7 +15,7 @@ A fully-local AI coding assistant CLI in Python, running 100% against a local Ol
 | Router | `qwen3:4b-instruct` | conversation + the **tool-calling loop** (decides which skill to run) |
 | Coder | `qwen2.5-coder:3b` | a "leaf" node (no tools, no history) called *as a skill* |
 
-Both via Ollama's `/api/chat`. CPU-only inference (~5–6 tok/s) — tokens-per-turn is the dominant cost, which ruled out "thinking"/CoT models for the router (see [Router model notes](#router-model-notes)).
+Both via Ollama's `/api/chat` (streamed). CPU-only inference (~5–6 tok/s) — tokens-per-turn is the dominant cost, which ruled out "thinking"/CoT models for the router (see [Router model notes](#router-model-notes)). Streaming means the read timeout only bounds model load + prompt evaluation (the silent phase); long generations no longer race a single blocking read.
 
 ### File structure (current)
 ```
@@ -77,7 +77,7 @@ Each skill module exposes `SCHEMAS = [(schema_dict, function), ...]`; `skills/__
 | `coder_model` | `qwen2.5-coder:3b` | coding leaf model |
 | `router_temperature` | `0.2` | router sampling temp |
 | `coder_temperature` | `0.1` | coder sampling temp |
-| `ollama_timeout` | `120` | seconds to wait for a model's first byte (chat calls) |
+| `ollama_timeout` | `300` | seconds to wait for the first streamed chunk (model load + prompt eval) |
 | `max_history_messages` | `12` | conversation context window (read per-turn) |
 | `max_tool_rounds` | `4` | tool-calling rounds before forcing a final answer |
 | `log_level` | `INFO` | `DEBUG`/`INFO`/`WARNING`/`ERROR` |

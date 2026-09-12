@@ -3,6 +3,7 @@ tests/test_router.py
 Unit tests for router.py's warm-up helper (offline -- requests.post is mocked).
 """
 
+import json
 import sys
 import unittest
 from pathlib import Path
@@ -127,6 +128,61 @@ class TestHandleMessage(unittest.TestCase):
         self.assertEqual(history[-1]["role"], "assistant")
 
 
+class _FakeStreamedResponse:
+    def __init__(self, lines):
+        self._lines = lines
+
+    def iter_lines(self):
+        return iter(self._lines)
+
+
+def _ndjson(*objs):
+    return [json.dumps(obj).encode() for obj in objs]
+
+
+class TestReadStreamedResponse(unittest.TestCase):
+    def test_reassembles_content_deltas(self):
+        lines = _ndjson(
+            {"message": {"role": "assistant", "content": "hel"}, "done": False},
+            {"message": {"role": "assistant", "content": "lo"}, "done": False},
+            {
+                "message": {"role": "assistant", "content": ""},
+                "done": True,
+                "eval_count": 5,
+                "prompt_eval_count": 10,
+            },
+        )
+        data = router.read_streamed_response(_FakeStreamedResponse(lines))
+        self.assertEqual(data["message"]["content"], "hello")
+        self.assertEqual(data["eval_count"], 5)
+        self.assertEqual(data["prompt_eval_count"], 10)
+
+    def test_captures_tool_calls_from_done_chunk(self):
+        tool_calls = [{"function": {"name": "list_files", "arguments": {"path": "."}}}]
+        lines = _ndjson(
+            {"message": {"role": "assistant", "content": "I'll list"}, "done": False},
+            {
+                "message": {"role": "assistant", "content": "", "tool_calls": tool_calls},
+                "done": True,
+                "eval_count": 3,
+                "prompt_eval_count": 4,
+            },
+        )
+        data = router.read_streamed_response(_FakeStreamedResponse(lines))
+        self.assertEqual(data["message"]["tool_calls"], tool_calls)
+        self.assertEqual(data["message"]["content"], "I'll list")
+
+    def test_skips_malformed_chunk(self):
+        lines = [
+            b"not-json",
+            json.dumps(
+                {"message": {"role": "assistant", "content": "ok"}, "done": True}
+            ).encode(),
+        ]
+        data = router.read_streamed_response(_FakeStreamedResponse(lines))
+        self.assertEqual(data["message"]["content"], "ok")
+
+
 class TestWarmUp(unittest.TestCase):
     @patch("router.requests.post")
     def test_warm_up_payload_and_timeout(self, mock_post):
@@ -163,14 +219,14 @@ class TestWarmUp(unittest.TestCase):
 
 class TestModelTimeout(unittest.TestCase):
     def test_default(self):
-        self.assertEqual(router.model_timeout({}), 120)
+        self.assertEqual(router.model_timeout({}), 300)
 
     def test_override(self):
         self.assertEqual(router.model_timeout({"ollama_timeout": 300}), 300)
 
     def test_non_positive_falls_back(self):
-        self.assertEqual(router.model_timeout({"ollama_timeout": 0}), 120)
-        self.assertEqual(router.model_timeout({"ollama_timeout": -5}), 120)
+        self.assertEqual(router.model_timeout({"ollama_timeout": 0}), 300)
+        self.assertEqual(router.model_timeout({"ollama_timeout": -5}), 300)
 
 
 if __name__ == "__main__":

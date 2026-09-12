@@ -27,7 +27,7 @@ SYSTEM_PROMPT = (
 
 _WARMUP_TIMEOUT = 300  # generous: cold model load on CPU can exceed the default per-turn cap
 _DEFAULT_MAX_TOOL_ROUNDS = 4  # tool-calling rounds before forcing a final answer
-_DEFAULT_MODEL_TIMEOUT = 120  # seconds to wait for a model's first byte (chat calls)
+_DEFAULT_MODEL_TIMEOUT = 300  # seconds to wait for the first streamed chunk (chat calls)
 
 # Session-wide token accounting, used by the autopilot's budget. `_call_ollama`,
 # `plan_goal`, and the coder leaf (via coder.ask_coder) accumulate
@@ -53,11 +53,48 @@ def accumulate_tokens(data: dict) -> None:
 def model_timeout(config: dict) -> int:
     """Per-request timeout (seconds) for Ollama chat calls, from config.
 
-    Bounds the time to wait for the first byte (model load + first token).
+    With streaming enabled this bounds the wait for the first streamed chunk
+    (model load + prompt evaluation, which produce no output until done).
     A missing or non-positive `ollama_timeout` falls back to the default.
     """
     value = int(config.get("ollama_timeout", _DEFAULT_MODEL_TIMEOUT) or 0)
     return value if value > 0 else _DEFAULT_MODEL_TIMEOUT
+
+
+def read_streamed_response(resp) -> dict:
+    """Read a streamed Ollama /api/chat response into the non-streamed shape.
+
+    With stream=true Ollama returns NDJSON: `message.content` arrives as deltas
+    across chunks, while `tool_calls` and the token counts (`eval_count`,
+    `prompt_eval_count`) arrive on the final `done: true` chunk. Reassemble the
+    full message and keep the final chunk's counters so callers see the same
+    dict they would get from a stream=false call.
+    """
+    content_parts: list[str] = []
+    tool_calls = None
+    final: dict = {}
+    for line in resp.iter_lines():
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            logger.warning("Skipping malformed streamed chunk from Ollama")
+            continue
+        message = obj.get("message") or {}
+        piece = message.get("content")
+        if piece:
+            content_parts.append(piece)
+        if message.get("tool_calls"):
+            tool_calls = message["tool_calls"]
+        if obj.get("done"):
+            final = obj
+
+    assembled = {"role": "assistant", "content": "".join(content_parts)}
+    if tool_calls is not None:
+        assembled["tool_calls"] = tool_calls
+    final["message"] = assembled
+    return final
 
 
 def warm_up(config: dict, model: str | None = None) -> None:
@@ -86,7 +123,7 @@ def _call_ollama(config: dict, messages: list[dict], use_tools: bool = True) -> 
     payload = {
         "model": config["router_model"],
         "messages": messages,
-        "stream": False,
+        "stream": True,
         "options": {"temperature": config.get("router_temperature", 0.2)},
     }
     if use_tools:
@@ -95,10 +132,11 @@ def _call_ollama(config: dict, messages: list[dict], use_tools: bool = True) -> 
     resp = requests.post(
         f"{config['ollama_host']}/api/chat",
         json=payload,
+        stream=True,
         timeout=model_timeout(config),
     )
     resp.raise_for_status()
-    data = resp.json()
+    data = read_streamed_response(resp)
     accumulate_tokens(data)
     return data
 
@@ -229,17 +267,18 @@ def plan_goal(config: dict, goal: str) -> list[str]:
             {"role": "system", "content": _PLAN_SYSTEM},
             {"role": "user", "content": goal},
         ],
-        "stream": False,
+        "stream": True,
         "format": "json",
         "options": {"temperature": config.get("router_temperature", 0.2)},
     }
     resp = requests.post(
         f"{config['ollama_host']}/api/chat",
         json=payload,
+        stream=True,
         timeout=model_timeout(config),
     )
     resp.raise_for_status()
-    data = resp.json()
+    data = read_streamed_response(resp)
     accumulate_tokens(data)
     steps = _parse_plan(data.get("message", {}).get("content", ""))
     return steps or [goal.strip()]

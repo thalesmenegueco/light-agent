@@ -56,11 +56,11 @@ def _model_error_reason(exc: Exception, config: dict) -> str:
     """Human-readable blocked reason for a model request failure.
 
     A read timeout is the common CPU-only case: Ollama took longer than
-    `ollama_timeout` to produce the first byte. Distinguish it from other
-    transport errors so the user knows which knob to turn.
+    `ollama_timeout` to produce the first streamed chunk. Distinguish it from
+    other transport errors so the user knows which knob to turn.
     """
     if isinstance(exc, requests.exceptions.ReadTimeout):
-        seconds = int(config.get("ollama_timeout", 120) or 120)
+        seconds = int(config.get("ollama_timeout", 300) or 300)
         return (
             f"model request timed out after {seconds}s "
             "(ollama_timeout); increase it and re-run the goal to resume from this step"
